@@ -7,6 +7,7 @@
  * a browser tab like everyone else — architecturally a listen server.
  */
 
+import { existsSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -21,8 +22,19 @@ import { createStaticHandler } from './static.ts';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const PORT = Number(process.env.PORT ?? 8080);
-/** Built client bundle. Falls back to the Vite dev output location. */
-const CLIENT_DIST = resolve(__dirname, '../../client/dist');
+
+/**
+ * Built client bundle.
+ *
+ * Two layouts have to work: the published npx package, where the client sits in
+ * `dist/public` beside the bundled server, and the workspace, where it is at
+ * `packages/client/dist`. Checking published-first means the shipped copy is
+ * never shadowed by a stale local build.
+ */
+const CLIENT_DIST = [
+  resolve(__dirname, 'public'),
+  resolve(__dirname, '../../client/dist'),
+].find((p) => existsSync(p)) ?? resolve(__dirname, '../../client/dist');
 
 const sockets = new Map<number, WebSocket>();
 

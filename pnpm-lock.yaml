@@ -42,16 +42,19 @@ importers:
 
   packages/server:
     dependencies:
-      '@squad-arena/shared':
-        specifier: workspace:*
-        version: link:../shared
       ws:
         specifier: ^8.18.0
         version: 8.21.2
     devDependencies:
+      '@squad-arena/shared':
+        specifier: workspace:*
+        version: link:../shared
       '@types/ws':
         specifier: ^8.5.13
         version: 8.18.1
+      esbuild:
+        specifier: ^0.25.12
+        version: 0.25.12
 
   packages/shared:
     devDependencies:

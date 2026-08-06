@@ -8,14 +8,15 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "pnpm -r typecheck && pnpm --filter @squad-arena/client build",
+    "build": "pnpm -r typecheck && pnpm --filter @squad-arena/client build && pnpm --filter squad-arena build",
     "dev": "pnpm --filter @squad-arena/client dev",
-    "host": "pnpm --filter @squad-arena/server start",
+    "host": "pnpm --filter squad-arena start",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm --filter @squad-arena/shared test",
     "lint": "eslint .",
     "format": "prettier --write .",
-    "sim:bench": "node --experimental-strip-types packages/server/src/bench.ts"
+    "sim:bench": "node --experimental-strip-types packages/server/src/bench.ts",
+    "host:dist": "pnpm --filter squad-arena serve:dist"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

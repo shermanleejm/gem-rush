@@ -17,7 +17,12 @@ export default tseslint.config(
   },
   {
     // The host is a CLI: its console output is the product, not debug noise.
+    // Node globals are declared explicitly because the shared package
+    // deliberately has none, so they cannot be enabled repo-wide.
     files: ['packages/server/**'],
+    languageOptions: {
+      globals: { console: 'readonly', process: 'readonly', setTimeout: 'readonly' },
+    },
     rules: { 'no-console': 'off' },
   },
   {

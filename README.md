@@ -13,11 +13,24 @@ squad is built by spending the very resource you're scored on.
 
 ## Play
 
+One person hosts. Everyone else just opens a link.
+
+```bash
+npx squad-arena
+```
+
+That is the whole install. It needs [Node.js](https://nodejs.org) 20 or newer
+and nothing else — no accounts, no game client, no configuration.
+
+<details>
+<summary>Running from a clone instead</summary>
+
 ```bash
 pnpm install
 pnpm build
 pnpm host
 ```
+</details>
 
 The host prints everything needed to invite people:
 
@@ -47,6 +60,88 @@ play, which is why the tunnel command is printed on every boot.
 
 **The host quitting ends the match.** There is no host migration in v1.
 
+### Playing over the internet
+
+You have two options. **Try the tunnel first** — it works everywhere and takes
+about a minute. Port forwarding is faster once set up but every router's menus
+are different.
+
+#### Option A — a tunnel (recommended, no router access needed)
+
+Install [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/),
+then in a *second* terminal while the host is running:
+
+```bash
+cloudflared tunnel --url http://localhost:8080
+```
+
+It prints a URL like `https://random-words-here.trycloudflare.com`. Share that.
+It works from anywhere, needs no router changes, and gives you HTTPS for free.
+The URL dies when you stop cloudflared, so generate a fresh one each session.
+
+#### Option B — port forwarding
+
+You are telling your router "traffic arriving on port 8080 goes to my computer".
+
+1. **Find your router's address.** On Windows run `ipconfig` and use the
+   "Default Gateway" line — usually `192.168.0.1` or `192.168.1.1`. Open it in
+   a browser.
+2. **Log in.** The password is often printed on a sticker on the router itself.
+3. **Find the port forwarding page.** It hides under different names depending
+   on the brand: *Port Forwarding*, *Virtual Server*, *NAT*, *Applications &
+   Gaming*, or under an *Advanced* tab.
+4. **Add a rule:**
+   - External / public port: `8080`
+   - Internal / private port: `8080`
+   - Protocol: `TCP`
+   - Internal IP: the LAN address the host printed (e.g. `192.168.0.9`)
+5. **Save**, then share the public-IP URL the host printed.
+
+Two things that catch people out: most home broadband gives you a *dynamic*
+public IP, so it can change and the link stops working; and some ISPs use
+CGNAT, where port forwarding cannot work at all no matter what you configure.
+If forwarding looks correct but nobody can connect, it is probably CGNAT — use
+the tunnel.
+
+## It doesn't work
+
+**Nobody can reach me on the same Wi-Fi.**
+Check they typed `http://` and not `https://`, and the right port. If it still
+fails it is almost always the host's firewall — on Windows, the first run pops
+a "Windows Defender Firewall has blocked some features" dialog and you must
+allow it on **private networks**. If you dismissed it, allow Node manually
+under Settings → Network & Internet → Windows Firewall → Allow an app. Also
+confirm both devices are on the same network: many homes have separate 2.4GHz
+and 5GHz SSIDs, and a "Guest" network usually blocks device-to-device traffic
+entirely.
+
+**"Port 8080 is already in use".**
+Something else is on that port. Run with a different one:
+`PORT=8081 npx squad-arena` (PowerShell: `$env:PORT=8081; npx squad-arena`).
+Remember to share the new port number too.
+
+**The page loads but stays on "Connecting…".**
+The HTTP side works and the WebSocket does not, which usually means a proxy or
+corporate network stripping the upgrade. Try the tunnel, or a phone on mobile
+data to confirm.
+
+**It works for me but not over the internet.**
+The LAN address (`192.168.x.x`) only works inside your house. You need Option A
+or Option B above.
+
+**Everything is laggy for one player.**
+Press `~` to open the dev overlay and read their RTT and jitter. The host's
+*upload* speed is the shared bottleneck: eight players is roughly 100 KB/s up.
+If the host is on slow broadband, fewer players will help.
+
+**The host closed their laptop and the game died.**
+Expected. The host runs the simulation, so the match ends with it. There is no
+host migration.
+
+**A player dropped mid-match.**
+Their squad is held for 30 seconds. If they reload the page in that window they
+get it back; after that they respawn fresh next round.
+
 ## Controls
 
 One input: move.
@@ -62,9 +157,21 @@ The only other decision is picking one of three units when you open a chest.
 
 ```bash
 pnpm dev          # Vite dev server on :5173, proxies /ws to the host on :8080
-pnpm host         # the authoritative host process
+pnpm host         # the authoritative host process (TypeScript, no build)
 pnpm test         # simulation tests
 pnpm typecheck    # all three packages
+pnpm build        # typecheck + client bundle + publishable host package
+pnpm host:dist    # run the built package exactly as `npx` would
+```
+
+`pnpm build` bundles the host and the `shared` simulation into a single JS file
+with esbuild and copies the client in beside it, so the published tarball has
+one runtime dependency (`ws`) and needs no workspace. Verify a release the way
+a stranger receives it rather than trusting the build:
+
+```bash
+cd packages/server && npm pack
+cd /tmp && npm install /path/to/squad-arena-0.1.0.tgz && ./node_modules/.bin/squad-arena
 ```
 
 Run `pnpm host` and `pnpm dev` together while working on the client: Vite serves
@@ -124,10 +231,13 @@ Measured against the §5 budgets:
 | Downstream per client | ≤ 15 KB/s | **3.5 KB/s** |
 | Bundle, gzipped | < 2 MB | **~152 KB** |
 
-Partial M7: the touch joystick now renders, there is a corner minimap, and a
-banner explains a squad wipe. Not yet done: real art and audio, and
-`npx squad-arena` distribution. Placeholder art is coloured shapes — silhouette
-and colour are the whole visual language for now.
+M7 done: a procedurally-generated original sprite atlas (per-archetype
+silhouettes with role glyphs), synthesised WebAudio SFX with a mute toggle, the
+touch joystick, a minimap, and a squad-wipe banner. M8 done: the host is
+packaged so `npx squad-arena` works with no clone, no pnpm and no build step.
+
+Neither the art nor the audio ships a single asset byte — both are generated at
+boot — so the whole client is still ~83 KB gzipped against a 2 MB budget.
 
 ## Balance harness
 
