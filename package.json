@@ -1,5 +1,5 @@
 {
-  "name": "squad-arena",
+  "name": "gem-rush",
   "version": "0.1.0",
   "private": true,
   "description": "Real-time multiplayer top-down arena collection game. Peer-hosted, browser only.",
@@ -8,15 +8,15 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "pnpm -r typecheck && pnpm --filter @squad-arena/client build && pnpm --filter squad-arena build",
-    "dev": "pnpm --filter @squad-arena/client dev",
-    "host": "pnpm --filter squad-arena start",
+    "build": "pnpm -r typecheck && pnpm --filter @gem-rush/client build && pnpm --filter gem-rush build",
+    "dev": "pnpm --filter @gem-rush/client dev",
+    "host": "pnpm --filter gem-rush start",
     "typecheck": "pnpm -r typecheck",
-    "test": "pnpm --filter @squad-arena/shared test",
+    "test": "pnpm --filter @gem-rush/shared test",
     "lint": "eslint .",
     "format": "prettier --write .",
     "sim:bench": "node --experimental-strip-types packages/server/src/bench.ts",
-    "host:dist": "pnpm --filter squad-arena serve:dist"
+    "host:dist": "pnpm --filter gem-rush serve:dist"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

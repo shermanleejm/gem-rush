@@ -1,7 +1,7 @@
 /**
  * Produce a self-contained, publishable host package (brief §M8).
  *
- * `npx squad-arena` has to work with no pnpm, no workspace and no build step on
+ * `npx gem-rush` has to work with no pnpm, no workspace and no build step on
  * the user's machine, so this bundles the TypeScript host *and* the `shared`
  * simulation it imports into one JS file, then copies the built client bundle
  * in beside it. `ws` stays external because it has native-ish internals and is
@@ -21,7 +21,7 @@ const clientDist = resolve(here, '../client/dist');
 if (!existsSync(clientDist)) {
   console.error(
     '\n  Client bundle missing at packages/client/dist.\n' +
-      '  Run `pnpm --filter @squad-arena/client build` first.\n',
+      '  Run `pnpm --filter @gem-rush/client build` first.\n',
   );
   process.exit(1);
 }

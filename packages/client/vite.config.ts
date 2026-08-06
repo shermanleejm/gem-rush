@@ -2,7 +2,7 @@ import { defineConfig } from 'vite';
 
 export default defineConfig({
   // Relative so the same bundle works from a GitHub Pages project path
-  // (/gang_poppers/), from the Node host at the domain root, and from a file
+  // (/gem-rush/), from the Node host at the domain root, and from a file
   // server in a subdirectory — without a build flag for each.
   base: './',
   build: {

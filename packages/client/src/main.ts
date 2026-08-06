@@ -12,7 +12,7 @@ import {
   type LobbyPlayer,
   type UnitType,
   type WorldEvent,
-} from '@squad-arena/shared';
+} from '@gem-rush/shared';
 
 import { Controls } from './input/controls.ts';
 import { BrowserHost } from './net/browserHost.ts';

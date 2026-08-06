@@ -26,7 +26,7 @@ import {
   type SnapshotMsg,
   type UnitType,
   type WorldEvent,
-} from '@squad-arena/shared';
+} from '@gem-rush/shared';
 
 /** Render this far behind the newest snapshot, in ms (§2.6). */
 const BASE_INTERP_DELAY = 100;

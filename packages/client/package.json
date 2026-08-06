@@ -1,5 +1,5 @@
 {
-  "name": "@squad-arena/client",
+  "name": "@gem-rush/client",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -10,7 +10,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@squad-arena/shared": "workspace:*",
+    "@gem-rush/shared": "workspace:*",
     "peerjs": "^1.5.5",
     "pixi.js": "^8.6.6"
   },

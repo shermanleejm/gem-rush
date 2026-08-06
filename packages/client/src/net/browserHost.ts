@@ -7,7 +7,7 @@
  * wired in through a loopback transport so they are just another client.
  */
 
-import { Room, TICK_DT, decode, type ClientMessage } from '@squad-arena/shared';
+import { Room, TICK_DT, decode, type ClientMessage } from '@gem-rush/shared';
 
 import { PeerHost } from './peer.ts';
 import { LoopbackTransport } from './transport.ts';

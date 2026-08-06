@@ -1,9 +1,9 @@
 {
-  "name": "squad-arena",
+  "name": "gem-rush",
   "version": "0.1.0",
   "type": "module",
   "bin": {
-    "squad-arena": "./dist/index.js"
+    "gem-rush": "./dist/index.js"
   },
   "scripts": {
     "build": "node build.mjs",
@@ -16,7 +16,7 @@
     "ws": "^8.18.0"
   },
   "devDependencies": {
-    "@squad-arena/shared": "workspace:*",
+    "@gem-rush/shared": "workspace:*",
     "@types/ws": "^8.5.13",
     "esbuild": "^0.25.12"
   },

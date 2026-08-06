@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Squad Arena host (brief §2.1).
+ * Gem Rush host (brief §2.1).
  *
  * One Node process: serves the client bundle over HTTP and runs the
  * authoritative simulation over WebSocket, on a single port. The host plays in
@@ -12,7 +12,7 @@ import { createServer } from 'node:http';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { Room, TICK_DT, decode, type ClientMessage } from '@squad-arena/shared';
+import { Room, TICK_DT, decode, type ClientMessage } from '@gem-rush/shared';
 import { WebSocketServer, type WebSocket } from 'ws';
 
 import { lanAddresses, printBanner, publicAddress } from './netinfo.ts';

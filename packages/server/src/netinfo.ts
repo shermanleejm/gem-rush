@@ -77,7 +77,7 @@ export function printBanner(port: number, addrs: HostAddresses): void {
   const log = console.log;
 
   log('');
-  log(`${BOLD}  Squad Arena${RESET} ${DIM}— host running${RESET}`);
+  log(`${BOLD}  Gem Rush${RESET} ${DIM}— host running${RESET}`);
   log(`  ${line}`);
   log('');
   log(`  ${BOLD}On this machine${RESET}`);

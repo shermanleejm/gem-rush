@@ -1,4 +1,4 @@
-# Squad Arena
+# Gem Rush
 
 Real-time multiplayer top-down arena collection game. Browser only, peer-hosted:
 one person runs a single command and shares a URL. No accounts, no installs, no
@@ -33,7 +33,7 @@ If someone can't join, the fallback is the downloadable host, which is a plain
 web server and works anywhere on a LAN:
 
 ```bash
-npx squad-arena
+npx gem-rush
 ```
 
 That prints a LAN URL, a public IP, and a tunnel command. Everyone opens the
@@ -78,7 +78,7 @@ a stranger receives it rather than trusting the build:
 
 ```bash
 cd packages/server && npm pack
-cd /tmp && npm install /path/to/squad-arena-0.1.0.tgz && ./node_modules/.bin/squad-arena
+cd /tmp && npm install /path/to/gem-rush-0.1.0.tgz && ./node_modules/.bin/gem-rush
 ```
 
 Run `pnpm host` and `pnpm dev` together while working on the client: Vite serves
@@ -99,7 +99,7 @@ is authoritative and everyone else sends inputs; only the pipe differs.
 - **WebRTC (default, static hosting).** A browser tab runs `Room` and guests
   connect by room code. Signalling uses PeerJS's free public broker, which only
   introduces two peers — once the DataChannel opens no game traffic touches it.
-- **WebSocket (`npx squad-arena`).** A Node process runs the same `Room` and
+- **WebSocket (`npx gem-rush`).** A Node process runs the same `Room` and
   serves the bundle on one port.
 
 A full peer-to-peer *mesh* was still rejected: with no single authority an
@@ -152,7 +152,7 @@ Measured against the §5 budgets:
 M7 done: a procedurally-generated original sprite atlas (per-archetype
 silhouettes with role glyphs), synthesised WebAudio SFX with a mute toggle, the
 touch joystick, a minimap, and a squad-wipe banner. M8 done: the host is
-packaged so `npx squad-arena` works with no clone, no pnpm and no build step.
+packaged so `npx gem-rush` works with no clone, no pnpm and no build step.
 
 Neither the art nor the audio ships a single asset byte — both are generated at
 boot — so the whole client is still ~83 KB gzipped against a 2 MB budget.

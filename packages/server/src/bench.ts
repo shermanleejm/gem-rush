@@ -26,7 +26,7 @@ import {
   type Bot,
   type BotPolicy,
   type InputCommand,
-} from '@squad-arena/shared';
+} from '@gem-rush/shared';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 

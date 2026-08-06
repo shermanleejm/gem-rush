@@ -43,7 +43,7 @@ jobs:
       - run: pnpm -r typecheck
       - run: pnpm test
 
-      - run: pnpm --filter @squad-arena/client build
+      - run: pnpm --filter @gem-rush/client build
 
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3

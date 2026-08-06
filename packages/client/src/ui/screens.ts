@@ -6,7 +6,7 @@
  * the bundle helps the <2MB budget.
  */
 
-import { UNIT_DEFS, type LobbyPlayer, type UnitType } from '@squad-arena/shared';
+import { UNIT_DEFS, type LobbyPlayer, type UnitType } from '@gem-rush/shared';
 
 function el<K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -41,7 +41,7 @@ export function showJoin(
   const overlay = el('div', 'overlay');
   const card = el('div', 'card');
 
-  card.appendChild(el('h1', 'title', 'Squad Arena'));
+  card.appendChild(el('h1', 'title', 'Gem Rush'));
   card.appendChild(
     el(
       'p',

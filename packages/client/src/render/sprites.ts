@@ -14,7 +14,7 @@
 
 import { Graphics, type Renderer, type Texture } from 'pixi.js';
 
-import { UNIT_TYPES, type UnitType } from '@squad-arena/shared';
+import { UNIT_TYPES, type UnitType } from '@gem-rush/shared';
 
 /** Texture resolution. Sprites render around 30px, so 64 is ample. */
 const S = 64;

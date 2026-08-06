@@ -16,7 +16,7 @@ import {
   type Text,
 } from 'pixi.js';
 
-import { MAP, TILE_WALL, UNIT_DEFS, type UnitType } from '@squad-arena/shared';
+import { MAP, TILE_WALL, UNIT_DEFS, type UnitType } from '@gem-rush/shared';
 
 import type { ViewEntity } from '../net/connection.ts';
 import { buildSpriteAtlas, type SpriteAtlas } from './sprites.ts';
