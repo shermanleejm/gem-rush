@@ -19,7 +19,7 @@ import {
 import { MAP, TILE_WALL, UNIT_DEFS, type UnitType } from '@gem-rush/shared';
 
 import type { ViewEntity } from '../net/connection.ts';
-import { buildSpriteAtlas, type SpriteAtlas } from './sprites.ts';
+import { buildSpriteAtlas, type SpriteAtlas } from './sprites3d.ts';
 
 /**
  * Screen pixels per world tile at zoom 1.
@@ -94,12 +94,13 @@ export class Scene {
   }
 
   /**
-   * Build the procedural sprite atlas (see render/sprites.ts). Bodies are white
-   * so they can be tinted per archetype and team, and each archetype has its own
-   * silhouette so role is readable before colour is (§1.5).
+   * Bake the sprite atlas from 3D models (see render/sprites3d.ts). Each sprite
+   * is a real lit mesh rendered once at boot, in near-white so it can be tinted
+   * per archetype and team, with a silhouette that reads role before colour
+   * does (§1.5).
    */
   private buildTextures(): void {
-    this.atlas = buildSpriteAtlas(this.app.renderer as Renderer);
+    this.atlas = buildSpriteAtlas();
   }
 
   /**

@@ -1,0 +1,34 @@
+<!doctype html>
+<!--
+  Sprite contact sheet — a dev-only page for eyeballing the baked 3D sprites.
+
+  Vite's production build only takes index.html as an entry, so this is served
+  by `pnpm dev` and never shipped. It exists because the sprites are baked from
+  3D models at boot: when a model's lighting or proportions are wrong, seeing it
+  at 30px in the middle of a match is useless. Here every sprite is rendered
+  large, on both the dark game floor and a light background, tinted and untinted.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Gem Rush — sprite sheet</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 24px;
+        background: #12151c;
+        color: #e6e9ef;
+        font: 14px/1.4 ui-sans-serif, system-ui, sans-serif;
+      }
+      h1 { font-size: 16px; font-weight: 600; margin: 0 0 4px; }
+      p { color: #8b93a7; margin: 0 0 20px; }
+      #sheet { display: block; }
+    </style>
+  </head>
+  <body>
+    <h1>Baked sprite atlas</h1>
+    <p>Each sprite is a 3D model rendered once at boot. Rows: untinted, team tint, light background.</p>
+    <canvas id="sheet"></canvas>
+    <script type="module" src="/src/dev/spriteSheet.ts"></script>
+  </body>
+</html>
