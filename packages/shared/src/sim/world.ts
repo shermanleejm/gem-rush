@@ -378,8 +378,33 @@ export class World {
       });
     }
 
+    // Stamp damage time before regen runs, so anything hit this tick is
+    // correctly considered in combat.
     for (const d of this.damageBuf) {
+      const target = this.store.get(d.targetId);
+      if (target) target.lastDamagedAt = now;
       this.events.push({ t: 'hit', x: d.x, y: d.y, targetId: d.targetId, amount: d.amount });
+    }
+
+    this.applyRegen(dt, now);
+  }
+
+  /**
+   * Out-of-combat regeneration for squad units.
+   *
+   * Only units regenerate: creeps healing would make camps unclearable by a
+   * squad that has to hold formation, and props/nodes are meant to stay broken
+   * until their respawn timer.
+   */
+  private applyRegen(dt: number, now: number): void {
+    const rate = MATCH.regenPerSecond;
+    if (rate <= 0) return;
+
+    for (const e of this.store.items) {
+      if (!e.alive || e.kind !== 'unit') continue;
+      if (e.hp <= 0 || e.hp >= e.maxHp) continue;
+      if (now - e.lastDamagedAt < MATCH.regenDelaySeconds) continue;
+      e.hp = Math.min(e.maxHp, e.hp + rate * dt);
     }
   }
 
@@ -485,11 +510,30 @@ export class World {
 
       // Gems — the leader hoovers them up within a generous radius so
       // collection doesn't demand pixel-accurate steering on a phone.
-      const pickupRadius = 1.1;
-      const pickupSq = pickupRadius * pickupRadius;
+      //
+      // Squad units collect too, at a shorter reach. This is what makes squad
+      // size pay for itself: farming is bottlenecked on travel time, not kill
+      // speed, so without it a bigger squad earned nothing extra and buying
+      // chests was pure cost. The bench harness measured identical gross income
+      // (~73 gems) for a bot that bought five chests and one that bought none.
+      const leaderPickupSq = 1.1 * 1.1;
+      const unitPickupSq = 0.75 * 0.75;
+      const squad = this.squads.get(player.id) ?? [];
+
       for (const e of this.store.items) {
         if (!e.alive || e.kind !== 'gem' || e.pickupDelay > 0) continue;
-        if (distanceSq(leader.x, leader.y, e.x, e.y) > pickupSq) continue;
+
+        let collected = distanceSq(leader.x, leader.y, e.x, e.y) <= leaderPickupSq;
+        if (!collected) {
+          for (const unit of squad) {
+            if (distanceSq(unit.x, unit.y, e.x, e.y) <= unitPickupSq) {
+              collected = true;
+              break;
+            }
+          }
+        }
+        if (!collected) continue;
+
         player.gems += e.value;
         this.events.push({ t: 'gem', x: e.x, y: e.y, player: player.id, value: e.value });
         this.store.despawn(e);
@@ -687,6 +731,7 @@ export class World {
           camp.x + Math.cos(angle) * 0.9,
           camp.y + Math.sin(angle) * 0.9,
           camp.id,
+          camp.strength,
         );
       }
     }

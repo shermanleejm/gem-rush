@@ -57,6 +57,8 @@ export interface Entity {
   slowFactor: number;
   /** Debounce for Mender heals (§1.6: one heal tick per target per 0.5s). */
   lastHealedAt: number;
+  /** Match time of the last damage taken; gates out-of-combat regen. */
+  lastDamagedAt: number;
 
   // ── gem / pickup ────────────────────────────────────────────────────────
   /** Gem value, or chest price. */
@@ -91,6 +93,7 @@ function blankEntity(id: EntityId): Entity {
     slowRemaining: 0,
     slowFactor: 0,
     lastHealedAt: -1,
+    lastDamagedAt: -999,
     value: 0,
     respawnIn: 0,
     pickupDelay: 0,

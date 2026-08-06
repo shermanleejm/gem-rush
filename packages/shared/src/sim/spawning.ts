@@ -81,15 +81,36 @@ export function spawnNode(store: EntityStore, x: number, y: number): Entity {
   return e;
 }
 
-export function spawnCreep(store: EntityStore, x: number, y: number, campId: number): Entity {
+/**
+ * Camp difficulty by zone (§1.8: outer zones are safe, the centre holds the
+ * toughest camp). Identical camps everywhere meant a starting squad of two
+ * Strikers could not clear any of them — the bench harness measured 3 creep
+ * kills against 92 unit deaths across a full match — so nobody ever farmed
+ * camps and squad size never paid for itself.
+ */
+export const CREEP_ZONE_STRENGTH: readonly number[] = [1.6, 1.15, 0.8, 0.6];
+
+export function creepStrengthAt(x: number, y: number): number {
+  const zone = zoneAt(x, y);
+  return CREEP_ZONE_STRENGTH[zone] ?? CREEP_ZONE_STRENGTH[CREEP_ZONE_STRENGTH.length - 1]!;
+}
+
+export function spawnCreep(
+  store: EntityStore,
+  x: number,
+  y: number,
+  campId: number,
+  strength = 1,
+): Entity {
   const e = store.spawn('creep');
   e.x = x;
   e.y = y;
   e.team = TEAM_NEUTRAL;
   e.radius = 0.3;
-  e.maxHp = CREEP_HP;
-  e.hp = CREEP_HP;
-  e.value = GEM_YIELD.creep;
+  e.maxHp = CREEP_HP * strength;
+  e.hp = e.maxHp;
+  // Tougher camps are worth more, so contesting the centre pays for its risk.
+  e.value = Math.max(1, Math.round(GEM_YIELD.creep * strength));
   e.campId = campId;
   e.unitType = 'striker'; // creeps reuse the Striker attack profile
   e.tier = 0;
@@ -165,6 +186,8 @@ export interface CreepCamp {
   respawnIn: number;
   /** Bonus paid once when the last creep in the camp dies. */
   bonus: number;
+  /** Zone-derived difficulty multiplier, reused when the camp respawns. */
+  strength: number;
 }
 
 /** Fill an empty world with props, nodes, camps and chest pads. */
@@ -188,12 +211,20 @@ export function populateArena(
   const camps: CreepCamp[] = [];
   for (let c = 0; c < MAP.creepCamps; c++) {
     const spot = centreBiasedSpot(tiles, rng, size, 3.0, store);
-    camps.push({ id: c, x: spot.x, y: spot.y, respawnIn: 0, bonus: GEM_YIELD.creepCampBonus });
+    const strength = creepStrengthAt(spot.x, spot.y);
+    camps.push({
+      id: c,
+      x: spot.x,
+      y: spot.y,
+      respawnIn: 0,
+      bonus: Math.round(GEM_YIELD.creepCampBonus * strength),
+      strength,
+    });
     for (let k = 0; k < MAP.creepsPerCamp; k++) {
       const angle = (k / MAP.creepsPerCamp) * Math.PI * 2;
       const cx = spot.x + Math.cos(angle) * 0.9;
       const cy = spot.y + Math.sin(angle) * 0.9;
-      spawnCreep(store, cx, cy, c);
+      spawnCreep(store, cx, cy, c, strength);
     }
   }
 

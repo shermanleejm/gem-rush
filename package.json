@@ -14,7 +14,8 @@
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm --filter @squad-arena/shared test",
     "lint": "eslint .",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "sim:bench": "node --experimental-strip-types packages/server/src/bench.ts"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

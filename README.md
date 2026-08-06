@@ -124,6 +124,60 @@ Measured against the §5 budgets:
 | Downstream per client | ≤ 15 KB/s | **3.5 KB/s** |
 | Bundle, gzipped | < 2 MB | **~152 KB** |
 
-Not yet done: real art and audio, minimap, the headless bot balance harness
-(`sim:bench`), and `npx squad-arena` distribution. Placeholder art is coloured
-shapes — silhouette and colour are the whole visual language for now.
+Not yet done: real art and audio, minimap, and `npx squad-arena` distribution.
+Placeholder art is coloured shapes — silhouette and colour are the whole visual
+language for now.
+
+## Balance harness
+
+```bash
+pnpm sim:bench --players 8 --rounds 200
+```
+
+Plays full matches with four scripted bot policies and writes `summary.csv`,
+`rounds.csv` and `gem_curve.csv` to `bench/`. It exits non-zero when a §4
+failure mode trips, so it can gate a change to the tuning tables. Run it
+whenever a number in `shared/src/config/` changes.
+
+The policies each isolate one strategy so a win-rate gap is attributable:
+`greedyGem` farms and buys opportunistically, `chestHungry` buys the instant it
+can afford to, `aggressive` hunts other squads, and `turtle` farms the safe rim
+and never buys — `turtle` is the control for the "can a non-buyer win?"
+question.
+
+### What it found, and what changed because of it
+
+Three real defects, each fixed at the cause rather than by nudging numbers:
+
+- **Units only ever lost HP.** They hold formation rather than chasing (§1.7),
+  so they collected chip damage brushing past camps with no way to recover it —
+  92 unit deaths against 3 creep kills in one match. Added out-of-combat regen.
+- **Every creep camp was identical**, so a starting squad of two Strikers could
+  not clear any of them (10 Strikers clear one in 0.1s; 2 cannot finish in 60s).
+  Camps now scale with zone, per §1.8's "outer zones are safe, the centre has
+  the toughest camp", and pay proportionally more.
+- **Squad size did not affect income.** Only the leader collected gems, and
+  farming is bottlenecked on travel time rather than kill speed, so a bot that
+  bought five chests and one that bought none had identical gross income (~73).
+  Squad units now collect gems too, at a shorter reach than the leader.
+
+Current standing at 8 players × 100 rounds:
+
+| policy | win% | avg gems | chests |
+|---|---:|---:|---:|
+| greedyGem (opportunistic buyer) | 35.5 | 64.9 | 0.92 |
+| turtle (never buys) | 12.0 | 36.9 | 0.00 |
+| aggressive | 2.0 | 10.0 | 0.27 |
+| chestHungry (over-buys) | 0.5 | 15.0 | 5.50 |
+
+Buying opportunistically beats never buying, over-buying is punished, and a
+non-buyer still wins 12% of the time — the M5 spending tension holds.
+
+**Two known imbalances remain.** `aggressive` wins 2% — fighting other players
+is currently a losing play, so the squad-vs-squad half of the design is not
+pulling its weight. And the 35pp spread across policies is wider than ideal.
+Note also that `chestHungry`'s 0.5% overstates the case against buying: it
+diverts to a chest the moment it can afford one, so it spends the match
+commuting rather than farming. Sweeping `chestPriceStep` from 3 to 1 raised its
+purchases from 5.8 to 8.8 and its win rate only from 0.0% to 2.5%, which is how
+price was ruled out as the cause.

@@ -14,5 +14,6 @@ export * from './sim/combat.ts';
 export * from './sim/fusion.ts';
 export * from './sim/spawning.ts';
 export * from './sim/world.ts';
+export * from './sim/bots.ts';
 
 export * from './protocol/messages.ts';

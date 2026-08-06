@@ -35,6 +35,18 @@ export interface MatchConfig {
   squadCatchupSpeed: number;
   /** How long a disconnected player's squad is held for reconnect. */
   reconnectGraceSeconds: number;
+  /**
+   * Out-of-combat regeneration.
+   *
+   * Without this, units only ever lose HP: they hold formation rather than
+   * chasing (§1.7), so they collect chip damage brushing past creep camps and
+   * never recover it. Over a four-minute match that is pure attrition — the
+   * bench harness measured 92 unit deaths against 3 creep kills — which makes
+   * buying units strictly bad and collapses the economy the game is built on.
+   * Regen keeps real fights decisive while making incidental damage survivable.
+   */
+  regenPerSecond: number;
+  regenDelaySeconds: number;
 }
 
 export const MATCH: MatchConfig = {
@@ -57,6 +69,8 @@ export const MATCH: MatchConfig = {
   leaderSpeed: 4.2,
   squadCatchupSpeed: 1.35,
   reconnectGraceSeconds: 30,
+  regenPerSecond: 6,
+  regenDelaySeconds: 4,
 };
 
 /** Gem yields per source (§1.3). Multiplied by Harvester bonus and last call. */
