@@ -47,6 +47,7 @@ export class Scene {
 
   private camX = MAP.size / 2;
   private camY = MAP.size / 2;
+  private cameraPlaced = false;
   private zoom = 1;
   private targetZoom = 1;
 
@@ -89,7 +90,21 @@ export class Scene {
    * drawing once into a texture makes terrain effectively free.
    */
   buildTerrain(size: number, tiles: Uint8Array): void {
+    this.cameraPlaced = false; // new map, re-snap to wherever we spawn
     this.terrainLayer.removeChildren();
+
+    // Backdrop beyond the arena, drawn as vector geometry rather than baked
+    // into the tile texture. The camera no longer clamps to the map, so the
+    // space outside is on screen whenever the leader nears an edge — and every
+    // home pad is on the rim, so that is every spawn. Baking it into the same
+    // texture meant stretching a map-sized bitmap across a much larger area,
+    // which came out badly blurred; a Graphics fill stays crisp at any zoom and
+    // costs one draw call.
+    const pad = 200;
+    const backdrop = new Graphics()
+      .rect(-pad, -pad, size + pad * 2, size + pad * 2)
+      .fill(0x05070b);
+    this.terrainLayer.addChild(backdrop);
 
     const g = new Graphics();
     g.rect(0, 0, size, size).fill(0x11161f);
@@ -108,6 +123,7 @@ export class Scene {
       }
     }
 
+    // Texture stays exactly map-sized so tiles remain crisp.
     const tex = (this.app.renderer as Renderer).generateTexture({
       target: g,
       resolution: 2,
@@ -117,6 +133,13 @@ export class Scene {
     sprite.height = size;
     this.terrainLayer.addChild(sprite);
     g.destroy();
+
+    // Rim on top of the tiles, so the playable area has a definite edge against
+    // the backdrop rather than fading into it.
+    const rim = new Graphics()
+      .rect(0, 0, size, size)
+      .stroke({ color: 0x55658a, width: 0.5, alignment: 1 });
+    this.terrainLayer.addChild(rim);
   }
 
   private take(): Sprite {
@@ -156,25 +179,40 @@ export class Scene {
     // Camera: follow with a soft lerp, zoom out as the squad grows so a big
     // blob stays framed (§2.7).
     if (localLeader) {
-      this.camX += (localLeader.x - this.camX) * Math.min(1, dt * 8);
-      this.camY += (localLeader.y - this.camY) * Math.min(1, dt * 8);
+      if (!this.cameraPlaced) {
+        // First frame: jump, don't ease. Easing in from the map centre reads
+        // as the camera drifting off the player at the start of every match.
+        this.camX = localLeader.x;
+        this.camY = localLeader.y;
+        this.cameraPlaced = true;
+      } else {
+        this.camX += (localLeader.x - this.camX) * Math.min(1, dt * 8);
+        this.camY += (localLeader.y - this.camY) * Math.min(1, dt * 8);
+      }
     }
     this.targetZoom = Math.max(0.62, 1 - squadSize * 0.022);
     this.zoom += (this.targetZoom - this.zoom) * Math.min(1, dt * 3);
 
     const scale = BASE_SCALE * this.zoom;
-    const w = this.app.renderer.width / this.app.renderer.resolution;
-    const h = this.app.renderer.height / this.app.renderer.resolution;
+    // app.screen is the logical (CSS) viewport. renderer.width is already
+    // logical too, so dividing it by resolution shrank the viewport by the
+    // device pixel ratio — invisible at DPR 1, but on a DPR-3 phone the leader
+    // rendered at a third of the way across instead of centred.
+    const w = this.app.screen.width;
+    const h = this.app.screen.height;
 
     this.world.scale.set(scale);
-    // Clamp so the camera never shows outside the arena.
-    const halfW = w / (2 * scale);
-    const halfH = h / (2 * scale);
-    const cx = Math.min(Math.max(this.camX, halfW), MAP.size - halfW);
-    const cy = Math.min(Math.max(this.camY, halfH), MAP.size - halfH);
+    // No clamping to the arena bounds: the leader is the thing the player is
+    // steering and it stays dead centre, always. Clamping kept the void off
+    // screen but pushed the leader into a corner whenever they approached an
+    // edge — and home pads sit on the rim, so that was every single spawn.
+    const cx = this.camX;
+    const cy = this.camY;
     this.world.position.set(w / 2 - cx * scale, h / 2 - cy * scale);
 
     // Cull to the visible rect plus a margin — off-screen entities cost nothing.
+    const halfW = w / (2 * scale);
+    const halfH = h / (2 * scale);
     const minX = cx - halfW - 2;
     const maxX = cx + halfW + 2;
     const minY = cy - halfH - 2;

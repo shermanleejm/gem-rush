@@ -82,7 +82,7 @@ async function detectServer(): Promise<boolean> {
 }
 
 let browserHost: BrowserHost | null = null;
-let closeRoomCode: (() => void) | null = null;
+let roomCode: { close: () => void; setVisible: (v: boolean) => void } | null = null;
 
 const listeners = {
   onWelcome: () => {
@@ -158,8 +158,8 @@ void detectServer().then((hasServer) => {
     start?.setBusy('Opening a room…');
     const host = new BrowserHost({
       onReady: (code) => {
-        closeRoomCode?.();
-        closeRoomCode = showRoomCode(code).close;
+        roomCode?.close();
+        roomCode = showRoomCode(code);
         conn.connect(host.loopback, choice.name, listeners);
         host.openLocalClient();
       },
@@ -308,6 +308,9 @@ function frame(now: number): void {
         .sort((a, b) => b.gems - a.gems);
       hud.setScores(rows, conn.playerId);
       if (!pendingOffer) hud.hideOffer();
+
+      // The code is only worth screen space while the host is still waiting.
+      roomCode?.setVisible(conn.players.length < 2);
     }
 
     // Joystick visual — screen-space, driven straight off the input state.

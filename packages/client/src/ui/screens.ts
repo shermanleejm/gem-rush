@@ -143,8 +143,17 @@ export function showJoin(
   };
 }
 
-/** Shown to the host so they can hand the code (or a link) to friends. */
-export function showRoomCode(code: string): { close: () => void } {
+/**
+ * Shown to the host so they can hand the code (or a link) to friends.
+ *
+ * Only useful while waiting for people, so the caller hides it once somebody
+ * has joined — a permanent overlay competing with the HUD is not worth the
+ * screen on a phone.
+ */
+export function showRoomCode(code: string): {
+  close: () => void;
+  setVisible: (visible: boolean) => void;
+} {
   const wrap = el('div', 'roomcode');
   const label = el('div', 'roomcode-label');
   label.textContent = 'Room code';
@@ -168,7 +177,12 @@ export function showRoomCode(code: string): { close: () => void } {
 
   wrap.append(label, value, copy);
   document.body.appendChild(wrap);
-  return { close: () => wrap.remove() };
+  return {
+    close: () => wrap.remove(),
+    setVisible: (visible) => {
+      wrap.style.display = visible ? '' : 'none';
+    },
+  };
 }
 
 // ── lobby ───────────────────────────────────────────────────────────────────

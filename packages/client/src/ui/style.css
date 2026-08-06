@@ -436,39 +436,43 @@ button.secondary {
   border-radius: 999px;
 }
 
-/* Room code panel, shown to whoever is hosting from their browser. */
+/* Room code, shown to whoever is hosting from their browser.
+   Sits *below* the top HUD row rather than on it: centred at the top it landed
+   squarely on the timer and squad counter and hid both. One compact row so it
+   costs a strip of screen rather than a block. */
 .roomcode {
   position: fixed;
-  top: max(10px, env(safe-area-inset-top));
+  top: calc(max(10px, env(safe-area-inset-top)) + 46px);
   left: 50%;
   transform: translateX(-50%);
-  z-index: 9;
+  z-index: 4; /* under the HUD, so it can never obscure the score */
   display: flex;
-  flex-direction: column;
   align-items: center;
-  gap: 6px;
-  padding: 10px 16px;
-  background: rgba(13, 17, 25, 0.9);
+  gap: 10px;
+  padding: 6px 8px 6px 14px;
+  background: rgba(13, 17, 25, 0.88);
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: 999px;
+  white-space: nowrap;
+  max-width: calc(100vw - 20px);
 }
 
 .roomcode-label {
-  font-size: 11px;
+  font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--ink-dim);
 }
 
 .roomcode-value {
-  font-size: 26px;
+  font-size: 18px;
   font-weight: 700;
-  letter-spacing: 0.16em;
+  letter-spacing: 0.14em;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   color: var(--accent);
 }
 
 .roomcode button {
-  padding: 6px 12px;
-  font-size: 13px;
+  padding: 5px 10px;
+  font-size: 12px;
 }
