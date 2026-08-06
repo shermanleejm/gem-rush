@@ -265,6 +265,31 @@ function main(): void {
     );
   }
 
+  /*
+   * §4's first named failure mode: "turtling in a safe outer zone out-earns
+   * contesting the center". The controller policy holds the middle and fights
+   * only what comes to it; turtle farms the rim and never contests. If holding
+   * the centre does not beat hiding on the rim, the zone yields are wrong.
+   */
+  const controller = agg.get('controller');
+  if (controller && controller.played > 0) {
+    const controllerWin = (controller.wins / controller.played) * 100;
+    const controllerGems = controller.gems / controller.played;
+    const turtleGems = turtle.gems / Math.max(1, turtle.played);
+    if (controllerWin <= turtleWin || controllerGems <= turtleGems) {
+      verdicts.push(
+        `FAIL  holding the centre (${controllerWin.toFixed(1)}%, ${controllerGems.toFixed(0)} gems) ` +
+          `does not beat turtling (${turtleWin.toFixed(1)}%, ${turtleGems.toFixed(0)} gems) — ` +
+          `raise centre yield in map.zoneYieldMultiplier.`,
+      );
+    } else {
+      verdicts.push(
+        `OK    holding the centre wins ${controllerWin.toFixed(1)}% with ${controllerGems.toFixed(0)} ` +
+          `gems vs turtling ${turtleWin.toFixed(1)}% / ${turtleGems.toFixed(0)} — contesting pays.`,
+      );
+    }
+  }
+
   const winRates = BOT_POLICIES.map((p) => {
     const a = agg.get(p)!;
     return a.played ? (a.wins / a.played) * 100 : 0;

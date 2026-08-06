@@ -15,7 +15,13 @@ import { MAP } from '../config/map.ts';
 import type { Entity } from './entities.ts';
 import type { InputCommand, PlayerState, World } from './world.ts';
 
-export const BOT_POLICIES = ['greedyGem', 'chestHungry', 'aggressive', 'turtle'] as const;
+export const BOT_POLICIES = [
+  'greedyGem',
+  'chestHungry',
+  'aggressive',
+  'turtle',
+  'controller',
+] as const;
 export type BotPolicy = (typeof BOT_POLICIES)[number];
 
 export interface Bot {
@@ -80,9 +86,32 @@ export function botInput(world: World, bot: Bot, seq: number): InputCommand {
     }
   }
 
+  // Grab loot underfoot before doing anything else. Every policy does this,
+  // because a player who walks past gems at their feet is not a model of any
+  // real player — and without it the aggressive policy in particular kills a
+  // squad, scatters its bank on the ground, and immediately runs off to the
+  // next fight leaving the reward for someone else. That confounds "fighting
+  // doesn't pay" with "this bot doesn't collect".
+  const underfoot = nearest(
+    world,
+    leader,
+    (e) => e.kind === 'gem' && e.pickupDelay <= 0,
+  );
+  if (underfoot) {
+    const dx = underfoot.x - leader.x;
+    const dy = underfoot.y - leader.y;
+    if (dx * dx + dy * dy <= LOOT_GRAB_RADIUS * LOOT_GRAB_RADIUS) {
+      const grab = toward(leader, underfoot.x, underfoot.y, seq);
+      return chestChoice === undefined ? grab : { ...grab, chestChoice };
+    }
+  }
+
   const move = movementFor(world, bot, player, leader, seq);
   return chestChoice === undefined ? move : { ...move, chestChoice };
 }
+
+/** How close a gem must be before a bot detours for it, in world units. */
+const LOOT_GRAB_RADIUS = 4;
 
 function wantsChest(bot: Bot, player: PlayerState, world: World): boolean {
   const squadFull = world.squadOf(player.index).length >= MATCH.squadCap;
@@ -103,6 +132,9 @@ function wantsChest(bot: Bot, player: PlayerState, world: World): boolean {
       // Never buys — this is the control that answers the M5 question
       // "can someone who never buys a chest still win?".
       return false;
+    case 'controller':
+      // Invests enough to hold ground, but not so much that the bank empties.
+      return player.gems >= player.nextChestPrice * 2;
   }
 }
 
@@ -153,6 +185,50 @@ function movementFor(
       const creep = nearest(world, leader, (e) => e.kind === 'creep');
       if (creep) return toward(leader, creep.x, creep.y, seq);
       return toward(leader, centre, centre, seq);
+    }
+
+    case 'controller': {
+      /*
+       * The strategy the game is actually built around (§1.3: "contest other
+       * players for the map's richest zones"). Hold the centre, where zone
+       * yield is 2x and the nodes are densest, farm what is there, and fight
+       * only what comes to you rather than chasing across the map.
+       *
+       * Added because none of the other policies model map control: the
+       * aggressive bot chases enemies anywhere, so it tests "hunting" rather
+       * than "holding", and the difference is the whole point of the design.
+       */
+      const dxc = leader.x - centre;
+      const dyc = leader.y - centre;
+      const distFromCentre = Math.hypot(dxc, dyc);
+      const holdRadius = MAP.zoneRadii[0]!;
+
+      if (distFromCentre > holdRadius) return toward(leader, centre, centre, seq);
+
+      const inZone = (e: Entity): boolean =>
+        Math.hypot(e.x - centre, e.y - centre) <= holdRadius + 2;
+
+      const gem = nearest(world, leader, (e) => e.kind === 'gem' && e.pickupDelay <= 0 && inZone(e));
+      if (gem) return toward(leader, gem.x, gem.y, seq);
+
+      if (player.gems >= player.nextChestPrice * 2) {
+        const chest = nearest(world, leader, (e) => e.kind === 'chest' && inZone(e));
+        if (chest) return toward(leader, chest.x, chest.y, seq);
+      }
+
+      const node = nearest(world, leader, (e) => e.kind === 'node' && inZone(e));
+      if (node) return toward(leader, node.x, node.y, seq);
+
+      const creep = nearest(world, leader, (e) => e.kind === 'creep' && inZone(e));
+      if (creep) return toward(leader, creep.x, creep.y, seq);
+
+      const prop = nearest(world, leader, (e) => e.kind === 'prop' && inZone(e));
+      if (prop) return toward(leader, prop.x, prop.y, seq);
+
+      // Nothing left to break: patrol the middle rather than leaving it.
+      const a = Math.atan2(dyc, dxc) + 0.4;
+      return toward(leader, centre + Math.cos(a) * holdRadius * 0.6,
+                    centre + Math.sin(a) * holdRadius * 0.6, seq);
     }
 
     case 'turtle': {

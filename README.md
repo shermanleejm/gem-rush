@@ -140,8 +140,9 @@ failure mode trips, so it can gate a change to the tuning tables. Run it
 whenever a number in `shared/src/config/` changes.
 
 The policies each isolate one strategy so a win-rate gap is attributable:
-`greedyGem` farms and buys opportunistically, `chestHungry` buys the instant it
-can afford to, `aggressive` hunts other squads, and `turtle` farms the safe rim
+`controller` holds the contested centre, `greedyGem` farms and buys
+opportunistically, `chestHungry` buys the instant it can afford to,
+`aggressive` hunts other squads across the map, and `turtle` farms the safe rim
 and never buys — `turtle` is the control for the "can a non-buyer win?"
 question.
 
@@ -161,23 +162,40 @@ Three real defects, each fixed at the cause rather than by nudging numbers:
   bought five chests and one that bought none had identical gross income (~73).
   Squad units now collect gems too, at a shorter reach than the leader.
 
-Current standing at 8 players × 100 rounds:
+Current standing at 8 players × 120 rounds (20% is the balanced baseline):
 
 | policy | win% | avg gems | chests |
 |---|---:|---:|---:|
-| greedyGem (opportunistic buyer) | 35.5 | 64.9 | 0.92 |
-| turtle (never buys) | 12.0 | 36.9 | 0.00 |
-| aggressive | 2.0 | 10.0 | 0.27 |
-| chestHungry (over-buys) | 0.5 | 15.0 | 5.50 |
+| controller (holds the centre) | 31.8 | 80.9 | 1.80 |
+| greedyGem (opportunistic buyer) | 21.4 | 60.9 | 0.64 |
+| turtle (never buys) | 6.8 | 33.7 | 0.00 |
+| aggressive (hunts across the map) | 2.1 | 19.8 | 0.26 |
+| chestHungry (over-buys) | 0.5 | 18.0 | 5.34 |
 
-Buying opportunistically beats never buying, over-buying is punished, and a
-non-buyer still wins 12% of the time — the M5 spending tension holds.
+Holding the contested centre wins and earns the most, buying opportunistically
+beats never buying, and a non-buyer still wins 6.8% of the time. Both the M5
+spending tension and §1.3's "contest the richest zones" thesis hold up.
 
-**Two known imbalances remain.** `aggressive` wins 2% — fighting other players
-is currently a losing play, so the squad-vs-squad half of the design is not
-pulling its weight. And the 35pp spread across policies is wider than ideal.
-Note also that `chestHungry`'s 0.5% overstates the case against buying: it
-diverts to a chest the moment it can afford one, so it spends the match
-commuting rather than farming. Sweeping `chestPriceStep` from 3 to 1 raised its
-purchases from 5.8 to 8.8 and its win rate only from 0.0% to 2.5%, which is how
-price was ruled out as the cause.
+### A wrong conclusion, corrected
+
+An earlier run read `aggressive`'s 2% win rate as "player-vs-player is a losing
+play, the squad-vs-squad half of the design isn't pulling its weight". That was
+wrong, and the way it was wrong is worth recording.
+
+Attributing every banked gem to its source showed `aggressive` *losing* 117
+fights and winning 58 — it hunts with a squad of 1.4 units and dies — while
+`chestHungry`, which actually invests, won 134 and lost 33. Investment beating
+naked aggression is the intended design, not a defect.
+
+What was missing was a bot that models *holding ground* rather than *chasing*.
+The `controller` policy was added for that, and it immediately became the
+strongest strategy. `aggressive` and `chestHungry` remain near the bottom, but
+they are deliberately bad strategies being correctly punished rather than
+evidence of imbalance.
+
+Two smaller confounds were fixed along the way: bots now pick up loot within 4
+units before doing anything else (previously the aggressive bot would wipe a
+squad, scatter its bank on the ground, and run off leaving the reward for
+someone else), and `chestHungry`'s poor showing was verified as a commuting cost
+rather than a price problem — sweeping `chestPriceStep` from 3 to 1 raised its
+purchases from 5.8 to 8.8 and its win rate only from 0.0% to 2.5%.
