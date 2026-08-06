@@ -124,9 +124,10 @@ Measured against the §5 budgets:
 | Downstream per client | ≤ 15 KB/s | **3.5 KB/s** |
 | Bundle, gzipped | < 2 MB | **~152 KB** |
 
-Not yet done: real art and audio, minimap, and `npx squad-arena` distribution.
-Placeholder art is coloured shapes — silhouette and colour are the whole visual
-language for now.
+Partial M7: the touch joystick now renders, there is a corner minimap, and a
+banner explains a squad wipe. Not yet done: real art and audio, and
+`npx squad-arena` distribution. Placeholder art is coloured shapes — silhouette
+and colour are the whole visual language for now.
 
 ## Balance harness
 

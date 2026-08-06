@@ -343,3 +343,81 @@ button.secondary {
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
+
+/* ── virtual joystick ─────────────────────────────────────────────────────── */
+/* Rendered in DOM rather than the Pixi scene: it is screen-space, moves rarely,
+   and a transform on a composited layer costs nothing per frame. */
+
+.stick {
+  position: fixed;
+  left: 0;
+  top: 0;
+  pointer-events: none;
+  z-index: 6;
+  opacity: 0;
+  transition: opacity 120ms ease;
+  will-change: transform;
+}
+
+.stick.on {
+  opacity: 1;
+}
+
+.stick-base {
+  width: 124px;
+  height: 124px;
+  margin: -62px 0 0 -62px;
+  border-radius: 50%;
+  border: 2px solid rgba(230, 235, 242, 0.22);
+  background: rgba(13, 17, 25, 0.3);
+}
+
+.stick-knob {
+  width: 54px;
+  height: 54px;
+  margin: -27px 0 0 -27px;
+  border-radius: 50%;
+  border: 2px solid rgba(230, 235, 242, 0.5);
+  background: rgba(77, 163, 255, 0.32);
+}
+
+/* ── minimap ──────────────────────────────────────────────────────────────── */
+
+.minimap {
+  position: fixed;
+  right: max(10px, env(safe-area-inset-right));
+  bottom: max(10px, env(safe-area-inset-bottom));
+  width: 132px;
+  height: 132px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: rgba(8, 11, 16, 0.75);
+  pointer-events: none;
+  z-index: 6;
+  image-rendering: pixelated;
+}
+
+/* ── wipe / respawn banner ────────────────────────────────────────────────── */
+
+.banner {
+  position: fixed;
+  left: 50%;
+  top: 38%;
+  transform: translate(-50%, -50%);
+  text-align: center;
+  pointer-events: none;
+  z-index: 7;
+}
+
+.banner .big {
+  font-size: 30px;
+  font-weight: 700;
+  color: var(--danger);
+  text-shadow: 0 2px 18px rgba(0, 0, 0, 0.7);
+}
+
+.banner .small {
+  margin-top: 6px;
+  font-size: 14px;
+  color: var(--ink-dim);
+}

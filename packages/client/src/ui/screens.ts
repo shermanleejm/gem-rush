@@ -327,3 +327,180 @@ export function createDevPanel(): DevHandle {
     },
   };
 }
+
+// ── virtual joystick ────────────────────────────────────────────────────────
+
+export interface StickHandle {
+  update: (active: boolean, ox: number, oy: number, kx: number, ky: number) => void;
+  destroy: () => void;
+}
+
+/**
+ * Visual for the touch joystick.
+ *
+ * The stick was previously tracked but never drawn, which left mobile players
+ * with no feedback at all about where their thumb had anchored — the single
+ * biggest barrier to the M7 goal of "an outsider can play without being told
+ * anything". Only transforms are touched per frame, so this stays composited.
+ */
+export function createStick(): StickHandle {
+  const base = el('div', 'stick');
+  base.appendChild(el('div', 'stick-base'));
+  const knob = el('div', 'stick');
+  knob.appendChild(el('div', 'stick-knob'));
+  document.body.append(base, knob);
+
+  /** Must match STICK_RADIUS in input/controls.ts. */
+  const maxTravel = 62;
+  let shown = false;
+
+  return {
+    update(active, ox, oy, kx, ky) {
+      if (active !== shown) {
+        shown = active;
+        base.classList.toggle('on', active);
+        knob.classList.toggle('on', active);
+      }
+      if (!active) return;
+
+      // Clamp the knob to the base so it can't fly off with the thumb.
+      let dx = kx - ox;
+      let dy = ky - oy;
+      const len = Math.hypot(dx, dy);
+      if (len > maxTravel) {
+        dx = (dx / len) * maxTravel;
+        dy = (dy / len) * maxTravel;
+      }
+      base.style.transform = `translate(${ox}px, ${oy}px)`;
+      knob.style.transform = `translate(${ox + dx}px, ${oy + dy}px)`;
+    },
+    destroy() {
+      base.remove();
+      knob.remove();
+    },
+  };
+}
+
+// ── minimap ─────────────────────────────────────────────────────────────────
+
+export interface MinimapHandle {
+  setTerrain: (size: number, tiles: Uint8Array) => void;
+  draw: (
+    dots: { x: number; y: number; kind: string; team: number; mine: boolean }[],
+    mapSize: number,
+  ) => void;
+  destroy: () => void;
+}
+
+const MINIMAP_TEAM_COLORS = [
+  '#4da3ff', '#ff7a59', '#56d9a3', '#ffc857', '#b98bff', '#ff6bb5', '#5ee0e0', '#a3d94d',
+];
+
+/**
+ * Corner minimap. Plain 2D canvas rather than another Pixi layer: it renders at
+ * a fixed small size, never scales, and keeping it off the scene graph means it
+ * costs nothing in the main batch.
+ */
+export function createMinimap(): MinimapHandle {
+  const canvas = document.createElement('canvas');
+  canvas.className = 'minimap';
+  const px = 132;
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  canvas.width = px * dpr;
+  canvas.height = px * dpr;
+  document.body.appendChild(canvas);
+
+  const ctx = canvas.getContext('2d')!;
+  ctx.scale(dpr, dpr);
+
+  // Terrain is baked once — it never changes during a match.
+  let terrain: HTMLCanvasElement | null = null;
+
+  return {
+    setTerrain(size, tiles) {
+      const off = document.createElement('canvas');
+      off.width = size;
+      off.height = size;
+      const octx = off.getContext('2d')!;
+      const img = octx.createImageData(size, size);
+      for (let i = 0; i < size * size; i++) {
+        const wall = tiles[i] === 1;
+        const o = i * 4;
+        img.data[o] = wall ? 0x39 : 0x14;
+        img.data[o + 1] = wall ? 0x44 : 0x1b;
+        img.data[o + 2] = wall ? 0x5a : 0x26;
+        img.data[o + 3] = 255;
+      }
+      octx.putImageData(img, 0, 0);
+      terrain = off;
+    },
+
+    draw(dots, mapSize) {
+      ctx.clearRect(0, 0, px, px);
+      if (terrain) {
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(terrain, 0, 0, px, px);
+      }
+      const s = px / mapSize;
+
+      // Draw pickups first so leaders always sit on top of them.
+      for (const d of dots) {
+        if (d.kind === 'gem') {
+          ctx.fillStyle = '#56d9a3';
+          ctx.fillRect(d.x * s - 1, d.y * s - 1, 2, 2);
+        } else if (d.kind === 'chest') {
+          ctx.fillStyle = '#ffc857';
+          ctx.fillRect(d.x * s - 1.5, d.y * s - 1.5, 3, 3);
+        }
+      }
+      for (const d of dots) {
+        if (d.kind !== 'leader') continue;
+        ctx.beginPath();
+        ctx.arc(d.x * s, d.y * s, d.mine ? 3.5 : 2.5, 0, Math.PI * 2);
+        ctx.fillStyle = MINIMAP_TEAM_COLORS[d.team % MINIMAP_TEAM_COLORS.length]!;
+        ctx.fill();
+        if (d.mine) {
+          ctx.strokeStyle = '#ffffff';
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+        }
+      }
+    },
+
+    destroy() {
+      canvas.remove();
+    },
+  };
+}
+
+// ── wipe / respawn banner ───────────────────────────────────────────────────
+
+export interface BannerHandle {
+  show: (big: string, small: string) => void;
+  hide: () => void;
+  destroy: () => void;
+}
+
+/** Tells the player why they suddenly have no squad — there was no feedback. */
+export function createBanner(): BannerHandle {
+  const root = el('div', 'banner');
+  const big = el('div', 'big');
+  const small = el('div', 'small');
+  root.append(big, small);
+  root.style.display = 'none';
+  document.body.appendChild(root);
+
+  return {
+    show(b, s) {
+      big.textContent = b;
+      small.textContent = s;
+      root.style.display = '';
+    },
+    hide() {
+      root.style.display = 'none';
+    },
+    destroy() {
+      root.remove();
+    },
+  };
+}

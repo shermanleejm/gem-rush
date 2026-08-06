@@ -18,8 +18,11 @@ import { Controls } from './input/controls.ts';
 import { Connection, type ViewEntity } from './net/connection.ts';
 import { Scene } from './render/scene.ts';
 import {
+  createBanner,
   createDevPanel,
   createHud,
+  createMinimap,
+  createStick,
   showJoin,
   showLobby,
   showResults,
@@ -33,6 +36,9 @@ const conn = new Connection();
 const controls = new Controls();
 const scene = new Scene();
 const dev = createDevPanel();
+const stick = createStick();
+const minimap = createMinimap();
+const banner = createBanner();
 
 let hud: HudHandle | null = null;
 let lobby: LobbyHandle | null = null;
@@ -105,8 +111,12 @@ let pendingMap: { size: number; tiles: Uint8Array } | null = null;
 function applyPendingMap(): void {
   if (!pendingMap || !scene.ready) return;
   scene.buildTerrain(pendingMap.size, pendingMap.tiles);
+  minimap.setTerrain(pendingMap.size, pendingMap.tiles);
+  mapSize = pendingMap.size;
   pendingMap = null;
 }
+
+let mapSize = 64;
 
 async function startMatch(): Promise<void> {
   if (!scene.ready) {
@@ -164,6 +174,7 @@ function handleEvents(events: WorldEvent[]): void {
 // ── loop ────────────────────────────────────────────────────────────────────
 
 let chestChoice: number | undefined;
+const minimapDots: { x: number; y: number; kind: string; team: number; mine: boolean }[] = [];
 let lastFrame = performance.now();
 let inputAcc = 0;
 let frameMsAvg = 0;
@@ -218,6 +229,37 @@ function frame(now: number): void {
         .sort((a, b) => b.gems - a.gems);
       hud.setScores(rows, conn.playerId);
       if (!pendingOffer) hud.hideOffer();
+    }
+
+    // Joystick visual — screen-space, driven straight off the input state.
+    stick.update(
+      input.stick.active,
+      input.stick.originX,
+      input.stick.originY,
+      input.stick.x,
+      input.stick.y,
+    );
+
+    // Minimap. Only leaders, gems and chests: unit dots at this scale are
+    // an unreadable smear, and the leader is what you navigate by.
+    minimapDots.length = 0;
+    for (const e of view.values()) {
+      if (e.kind !== 'leader' && e.kind !== 'gem' && e.kind !== 'chest') continue;
+      minimapDots.push({
+        x: e.x,
+        y: e.y,
+        kind: e.kind,
+        team: e.team,
+        mine: e.kind === 'leader' && e.team === conn.playerIndex,
+      });
+    }
+    minimap.draw(minimapDots, mapSize);
+
+    // Tell the player why their squad vanished — there was no feedback at all.
+    if (me?.wiped) {
+      banner.show('Squad wiped', 'Respawning at your home pad…');
+    } else {
+      banner.hide();
     }
   }
 
