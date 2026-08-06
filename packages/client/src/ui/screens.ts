@@ -504,3 +504,26 @@ export function createBanner(): BannerHandle {
     },
   };
 }
+
+// ── mute toggle ─────────────────────────────────────────────────────────────
+
+/** Persisted so a player who mutes once stays muted across rematches. */
+export function createMuteButton(
+  initiallyMuted: boolean,
+  onChange: (muted: boolean) => void,
+): () => void {
+  const btn = el('button', 'mute');
+  let muted = initiallyMuted;
+  const paint = (): void => {
+    btn.textContent = muted ? 'Sound off' : 'Sound on';
+  };
+  paint();
+  btn.onclick = () => {
+    muted = !muted;
+    localStorage.setItem('sa-muted', muted ? '1' : '0');
+    paint();
+    onChange(muted);
+  };
+  document.body.appendChild(btn);
+  return () => btn.remove();
+}

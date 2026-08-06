@@ -421,3 +421,17 @@ button.secondary {
   font-size: 14px;
   color: var(--ink-dim);
 }
+
+.mute {
+  position: fixed;
+  left: max(10px, env(safe-area-inset-left));
+  bottom: max(10px, env(safe-area-inset-bottom));
+  z-index: 7;
+  pointer-events: auto;
+  padding: 8px 12px;
+  font-size: 14px;
+  background: rgba(13, 17, 25, 0.82);
+  color: var(--ink-dim);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+}

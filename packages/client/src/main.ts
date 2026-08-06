@@ -16,12 +16,14 @@ import {
 
 import { Controls } from './input/controls.ts';
 import { Connection, type ViewEntity } from './net/connection.ts';
+import { Audio } from './render/audio.ts';
 import { Scene } from './render/scene.ts';
 import {
   createBanner,
   createDevPanel,
   createHud,
   createMinimap,
+  createMuteButton,
   createStick,
   showJoin,
   showLobby,
@@ -39,11 +41,13 @@ const dev = createDevPanel();
 const stick = createStick();
 const minimap = createMinimap();
 const banner = createBanner();
+const audio = new Audio();
 
 let hud: HudHandle | null = null;
 let lobby: LobbyHandle | null = null;
 let closeResults: (() => void) | null = null;
 let closeJoin: (() => void) | null = null;
+let removeMute: (() => void) | null = null;
 
 let hostId = 0;
 let lobbyPlayers: LobbyPlayer[] = [];
@@ -60,6 +64,10 @@ function socketUrl(): string {
 // ── flow ────────────────────────────────────────────────────────────────────
 
 closeJoin = showJoin((name) => {
+  // Browsers refuse to start an AudioContext without a gesture; joining is one.
+  audio.unlock();
+  audio.setMuted(localStorage.getItem('sa-muted') === '1');
+
   conn.connect(socketUrl(), name, {
     onWelcome: () => {
       closeJoin?.();
@@ -127,6 +135,7 @@ async function startMatch(): Promise<void> {
   applyPendingMap();
   scene.localTeam = conn.playerIndex;
   hud ??= createHud();
+  removeMute ??= createMuteButton(audio.isMuted, (m) => audio.setMuted(m));
   running = true;
 }
 
@@ -137,15 +146,23 @@ function handleEvents(events: WorldEvent[]): void {
     switch (ev.t) {
       case 'hit':
         scene.spawnHit(ev.x, ev.y, 0xffd9a0);
+        audio.play('hit');
         break;
       case 'death':
         scene.spawnBurst(ev.x, ev.y, ev.kind === 'creep' ? 0x9aa3b5 : 0x8a6f4f, 7);
+        audio.play('death');
         break;
       case 'gem':
-        if (ev.player === conn.playerId) scene.spawnBurst(ev.x, ev.y, 0x56d9a3, 4);
+        // Only our own pickups make a sound; eight players hoovering gems would
+        // otherwise be a constant chime.
+        if (ev.player === conn.playerId) {
+          scene.spawnBurst(ev.x, ev.y, 0x56d9a3, 4);
+          audio.play('pickup');
+        }
         break;
       case 'fusion':
         scene.spawnBurst(ev.x, ev.y, ev.tier === 2 ? 0xffe27a : 0xffffff, 14);
+        audio.play('fusion');
         break;
       case 'chestOffer':
         if (ev.player === conn.playerId) {
@@ -159,13 +176,16 @@ function handleEvents(events: WorldEvent[]): void {
         break;
       case 'chestOpen':
         scene.spawnBurst(ev.x, ev.y, 0xffc857, 10);
+        if (ev.player === conn.playerId) audio.play('chest');
         break;
       case 'squadFight':
         scene.spawnBurst(ev.x, ev.y, 0xff6b6b, 16);
+        audio.play(ev.loser === conn.playerId ? 'wipe' : 'death');
         break;
       case 'respawn':
         break;
       case 'phase':
+        audio.play('phase');
         break;
     }
   }

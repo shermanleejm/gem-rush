@@ -14,12 +14,12 @@ import {
   Sprite,
   type Renderer,
   type Text,
-  type Texture,
 } from 'pixi.js';
 
 import { MAP, TILE_WALL, UNIT_DEFS, type UnitType } from '@squad-arena/shared';
 
 import type { ViewEntity } from '../net/connection.ts';
+import { buildSpriteAtlas, type SpriteAtlas } from './sprites.ts';
 
 /** Screen pixels per world tile at zoom 1. */
 const BASE_SCALE = 34;
@@ -38,9 +38,7 @@ export class Scene {
   readonly entityLayer = new Container();
   readonly effectLayer = new Container();
 
-  private circleTex!: Texture;
-  private squareTex!: Texture;
-  private diamondTex!: Texture;
+  private atlas!: SpriteAtlas;
 
   private pool: Sprite[] = [];
   private active: Sprite[] = [];
@@ -77,23 +75,12 @@ export class Scene {
   }
 
   /**
-   * Three shared textures for every sprite. Silhouette plus colour is the whole
-   * visual language in v1 (§1.5), and one texture per shape means every unit
-   * batches into a single draw call.
+   * Build the procedural sprite atlas (see render/sprites.ts). Bodies are white
+   * so they can be tinted per archetype and team, and each archetype has its own
+   * silhouette so role is readable before colour is (§1.5).
    */
   private buildTextures(): void {
-    const renderer = this.app.renderer as Renderer;
-
-    const circle = new Graphics().circle(32, 32, 30).fill(0xffffff);
-    this.circleTex = renderer.generateTexture({ target: circle, resolution: 2 });
-
-    const square = new Graphics().roundRect(4, 4, 56, 56, 10).fill(0xffffff);
-    this.squareTex = renderer.generateTexture({ target: square, resolution: 2 });
-
-    const diamond = new Graphics()
-      .poly([32, 2, 62, 32, 32, 62, 2, 32])
-      .fill(0xffffff);
-    this.diamondTex = renderer.generateTexture({ target: diamond, resolution: 2 });
+    this.atlas = buildSpriteAtlas(this.app.renderer as Renderer);
   }
 
   /**
@@ -210,46 +197,46 @@ export class Scene {
 
     switch (e.kind) {
       case 'gem':
-        s.texture = this.diamondTex;
+        s.texture = this.atlas.gem;
         s.tint = 0x56d9a3;
-        s.width = s.height = 0.42;
+        s.width = s.height = 0.44;
         break;
       case 'prop':
-        s.texture = this.squareTex;
-        s.tint = 0x6b5a45;
-        s.width = s.height = 0.8;
+        s.texture = this.atlas.prop;
+        s.tint = 0x8a6f4f;
+        s.width = s.height = 0.86;
         break;
       case 'node':
-        s.texture = this.diamondTex;
+        s.texture = this.atlas.node;
         s.tint = 0x37b0c9;
-        s.width = s.height = 1.05;
+        s.width = s.height = 1.1;
         break;
       case 'chest':
-        s.texture = this.squareTex;
+        s.texture = this.atlas.chest;
         s.tint = 0xffc857;
-        s.width = s.height = 1.0;
+        s.width = s.height = 1.05;
         break;
       case 'creep':
-        s.texture = this.circleTex;
+        s.texture = this.atlas.creep;
         s.tint = 0x9aa3b5;
-        s.width = s.height = 0.6;
+        s.width = s.height = 0.68;
         break;
       case 'leader': {
-        s.texture = this.circleTex;
+        s.texture = this.atlas.leader;
         s.tint = TEAM_COLORS[e.team % TEAM_COLORS.length]!;
-        s.width = s.height = 0.9;
+        s.width = s.height = 0.95;
         break;
       }
       case 'unit': {
         const def = e.unitType ? UNIT_DEFS[e.unitType as UnitType] : null;
-        s.texture = def && def.attackRange > 2 ? this.diamondTex : this.circleTex;
+        s.texture = e.unitType ? this.atlas[e.unitType as UnitType] : this.atlas.striker;
         s.tint = def ? def.color : 0xffffff;
-        const size = (def ? def.radius : 0.3) * 2 * (1 + e.tier * 0.28);
+        const size = (def ? def.radius : 0.3) * 2.2 * (1 + e.tier * 0.26);
         s.width = s.height = size;
         break;
       }
       default:
-        s.texture = this.circleTex;
+        s.texture = this.atlas.spark;
         s.tint = 0xffffff;
         s.width = s.height = 0.5;
     }
@@ -276,7 +263,7 @@ export class Scene {
       // A thin ring marks fused and elite units so upgrades are legible.
       if (e.tier > 0) {
         const ring = this.take();
-        ring.texture = this.circleTex;
+        ring.texture = this.atlas.ring;
         ring.tint = e.tier === 2 ? 0xffe27a : 0xd8d8d8;
         ring.width = ring.height = Number(s.width) * 1.32;
         ring.alpha = 0.35;
@@ -296,7 +283,7 @@ export class Scene {
 
   spawnHit(x: number, y: number, color = 0xffffff): void {
     const s = this.effectPool.pop() ?? new Sprite();
-    s.texture = this.circleTex;
+    s.texture = this.atlas.spark;
     s.anchor.set(0.5);
     s.tint = color;
     s.width = s.height = 0.34;
