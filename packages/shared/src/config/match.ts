@@ -1,0 +1,72 @@
+/** Match rules (brief §1.4) and the tick contract (§2.4). All tunable data. */
+
+export const TICK_RATE = 20;
+export const TICK_DT = 1 / TICK_RATE;
+export const INPUT_RATE = 30;
+
+export interface MatchConfig {
+  minPlayers: number;
+  maxPlayers: number;
+  /** Total match length in seconds, last-call included. */
+  matchSeconds: number;
+  /** Length of the closing double-value phase, inside matchSeconds. */
+  lastCallSeconds: number;
+  /** Multiplier applied to every gem source during last call. */
+  lastCallMultiplier: number;
+  squadCap: number;
+  startingGems: number;
+  startingSquad: { type: string; count: number }[];
+  chestBasePrice: number;
+  /** Added to that player's next chest price each time they buy (§1.4). */
+  chestPriceStep: number;
+  chestOfferCount: number;
+  fusionThreshold: number;
+  /** Seconds before a wiped squad respawns at its home pad. */
+  respawnSeconds: number;
+  /** Free units granted on respawn. */
+  respawnSquad: { type: string; count: number }[];
+  /** Fraction of banked gems scattered when you lose a squad fight. */
+  gemLossFraction: number;
+  /** Seconds after match start before the late-unlock archetypes enter chests. */
+  lateUnlockSeconds: number;
+  /** Base leader move speed, world units per second. */
+  leaderSpeed: number;
+  /** Squad units move slightly faster than the leader so they can catch up. */
+  squadCatchupSpeed: number;
+  /** How long a disconnected player's squad is held for reconnect. */
+  reconnectGraceSeconds: number;
+}
+
+export const MATCH: MatchConfig = {
+  minPlayers: 1,
+  maxPlayers: 8,
+  matchSeconds: 240,
+  lastCallSeconds: 30,
+  lastCallMultiplier: 2,
+  squadCap: 15,
+  startingGems: 0,
+  startingSquad: [{ type: 'striker', count: 2 }],
+  chestBasePrice: 6,
+  chestPriceStep: 3,
+  chestOfferCount: 3,
+  fusionThreshold: 3,
+  respawnSeconds: 5,
+  respawnSquad: [{ type: 'striker', count: 2 }],
+  gemLossFraction: 0.2,
+  lateUnlockSeconds: 120,
+  leaderSpeed: 4.2,
+  squadCatchupSpeed: 1.35,
+  reconnectGraceSeconds: 30,
+};
+
+/** Gem yields per source (§1.3). Multiplied by Harvester bonus and last call. */
+export const GEM_YIELD = {
+  prop: 1,
+  resourceNode: 4,
+  creep: 2,
+  creepCampBonus: 6,
+};
+
+/** Match phases, in order. */
+export const PHASES = ['lobby', 'playing', 'lastCall', 'ended'] as const;
+export type Phase = (typeof PHASES)[number];

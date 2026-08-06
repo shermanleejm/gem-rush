@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "src",
+    "lib": ["ES2022"],
+    "types": ["node"],
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "noEmit": true
+  },
+  // No project reference to shared: it is consumed as raw TypeScript source
+  // via its package `exports`, and Node runs it with --experimental-strip-types.
+  // A composite reference would mean maintaining a build step for no benefit.
+  "include": ["src"]
+}

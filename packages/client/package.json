@@ -1,0 +1,19 @@
+{
+  "name": "@squad-arena/client",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@squad-arena/shared": "workspace:*",
+    "pixi.js": "^8.6.6"
+  },
+  "devDependencies": {
+    "vite": "^6.0.7"
+  }
+}

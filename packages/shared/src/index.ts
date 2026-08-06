@@ -1,0 +1,18 @@
+/** Public surface of the shared package. Host, client and tests all import this. */
+
+export * from './math/rng.ts';
+export * from './math/vec2.ts';
+
+export * from './config/units.ts';
+export * from './config/match.ts';
+export * from './config/map.ts';
+
+export * from './sim/entities.ts';
+export * from './sim/mapgen.ts';
+export * from './sim/formation.ts';
+export * from './sim/combat.ts';
+export * from './sim/fusion.ts';
+export * from './sim/spawning.ts';
+export * from './sim/world.ts';
+
+export * from './protocol/messages.ts';

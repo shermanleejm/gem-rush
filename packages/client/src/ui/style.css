@@ -1,0 +1,345 @@
+:root {
+  --bg: #0b0e14;
+  --panel: #151a24;
+  --panel-2: #1d2431;
+  --line: #2a3342;
+  --ink: #e6ebf2;
+  --ink-dim: #8e9bb0;
+  --accent: #4da3ff;
+  --gem: #56d9a3;
+  --danger: #ff6b6b;
+  --warn: #ffc857;
+}
+
+* {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  /* The game is a fullscreen canvas; browser overscroll would fight the joystick. */
+  overscroll-behavior: none;
+  touch-action: none;
+}
+
+#app {
+  position: fixed;
+  inset: 0;
+}
+
+canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* ── overlays ─────────────────────────────────────────────────────────────── */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: radial-gradient(ellipse at center, #121826 0%, #080a10 100%);
+  z-index: 10;
+}
+
+.card {
+  width: min(460px, 100%);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 24px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+}
+
+.title {
+  margin: 0 0 4px;
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.subtitle {
+  margin: 0 0 20px;
+  color: var(--ink-dim);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+label {
+  display: block;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-dim);
+  margin-bottom: 6px;
+}
+
+input[type='text'] {
+  width: 100%;
+  padding: 12px 14px;
+  /* 1rem keeps iOS Safari from zooming the viewport on focus. */
+  font-size: 1rem;
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  outline: none;
+}
+
+input[type='text']:focus {
+  border-color: var(--accent);
+}
+
+button {
+  font-size: 1rem;
+  font-weight: 600;
+  padding: 12px 18px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  background: var(--accent);
+  color: #04121f;
+  cursor: pointer;
+  transition: filter 120ms ease;
+}
+
+button:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+button.secondary {
+  background: var(--panel-2);
+  color: var(--ink);
+  border-color: var(--line);
+}
+
+.row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.mt {
+  margin-top: 16px;
+}
+
+.player-list {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.player-list li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  font-size: 14px;
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ink-dim);
+  flex: none;
+}
+
+.dot.ready {
+  background: var(--gem);
+}
+
+.spacer {
+  margin-left: auto;
+}
+
+.hint {
+  font-size: 12px;
+  color: var(--ink-dim);
+  margin-top: 14px;
+  line-height: 1.5;
+}
+
+.err {
+  color: var(--danger);
+  font-size: 13px;
+  margin-top: 10px;
+  min-height: 18px;
+}
+
+/* ── HUD ──────────────────────────────────────────────────────────────────── */
+
+.hud {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 5;
+  font-variant-numeric: tabular-nums;
+}
+
+.hud-top {
+  position: absolute;
+  top: max(10px, env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.pill {
+  background: rgba(13, 17, 25, 0.82);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 7px 14px;
+  font-size: 15px;
+  font-weight: 600;
+  backdrop-filter: blur(6px);
+}
+
+.pill.gems {
+  color: var(--gem);
+}
+
+.pill.timer.last-call {
+  color: var(--warn);
+  border-color: var(--warn);
+}
+
+.hud-left {
+  position: absolute;
+  top: max(10px, env(safe-area-inset-top));
+  left: max(10px, env(safe-area-inset-left));
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.score-row {
+  background: rgba(13, 17, 25, 0.82);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 5px 10px;
+  display: flex;
+  gap: 10px;
+  min-width: 150px;
+}
+
+.score-row.me {
+  border-color: var(--accent);
+}
+
+.score-row .g {
+  margin-left: auto;
+  color: var(--gem);
+  font-weight: 600;
+}
+
+/* Chest offer — the only place the game asks for a decision beyond movement. */
+.offer {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 10px;
+  pointer-events: auto;
+  z-index: 8;
+}
+
+.offer button {
+  min-width: 108px;
+  padding: 14px 12px;
+  background: var(--panel);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: center;
+}
+
+.offer button .role {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--ink-dim);
+}
+
+.swatch {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+}
+
+/* Dev overlay (§5: not optional). Toggled with ~. */
+.devpanel {
+  position: fixed;
+  right: max(10px, env(safe-area-inset-right));
+  top: max(10px, env(safe-area-inset-top));
+  background: rgba(8, 11, 16, 0.9);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--ink-dim);
+  pointer-events: none;
+  z-index: 20;
+  min-width: 168px;
+}
+
+.devpanel b {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.devpanel .bad {
+  color: var(--danger);
+}
+
+.results table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 12px;
+  font-size: 14px;
+}
+
+.results td {
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.results tr.win td {
+  color: var(--gem);
+  font-weight: 700;
+}
+
+.results td.g {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}

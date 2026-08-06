@@ -1,0 +1,10 @@
+packages:
+  - 'packages/*'
+
+allowBuilds:
+  esbuild: set this to true or false
+
+# esbuild ships prebuilt binaries and needs its install script to run.
+# Allowlisted explicitly rather than disabling pnpm's script blocking wholesale.
+onlyBuiltDependencies:
+  - esbuild

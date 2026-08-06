@@ -1,0 +1,22 @@
+{
+  "name": "@squad-arena/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "squad-arena": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "node --experimental-strip-types src/index.ts",
+    "dev": "node --watch --experimental-strip-types src/index.ts"
+  },
+  "dependencies": {
+    "@squad-arena/shared": "workspace:*",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.5.13"
+  }
+}

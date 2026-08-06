@@ -1,0 +1,386 @@
+/**
+ * One match instance (brief §2.3).
+ *
+ * Owns a World, runs the fixed 20 Hz tick loop, and turns world state into
+ * per-client snapshots. Everything authoritative lives here; clients only ever
+ * send inputs.
+ */
+
+import {
+  ENTITY_KINDS,
+  MATCH,
+  TICK_DT,
+  TICK_RATE,
+  UNIT_TYPES,
+  World,
+  type EntityWire,
+  type InputCommand,
+  type PlayerId,
+  type PlayerWire,
+  type SnapshotMsg,
+  type WorldEvent,
+} from '@squad-arena/shared';
+
+/** Full resync anchor every 100 ticks (5s), per §2.6. */
+const FULL_SNAPSHOT_INTERVAL = 100;
+
+export interface RoomMember {
+  id: PlayerId;
+  name: string;
+  ready: boolean;
+  connected: boolean;
+  reconnectToken: string;
+  /** Latest input received; applied on the next tick. */
+  input: InputCommand;
+  /** Last snapshot we sent them, for delta encoding. */
+  lastSent: Map<number, EntityWire>;
+  lastFullTick: number;
+  disconnectedAt: number | null;
+}
+
+export type Broadcast = (id: PlayerId, msg: unknown) => void;
+
+const KIND_INDEX = new Map(ENTITY_KINDS.map((k, i) => [k, i]));
+const UNIT_INDEX = new Map(UNIT_TYPES.map((u, i) => [u, i]));
+
+export class Room {
+  world: World | null = null;
+  readonly members = new Map<PlayerId, RoomMember>();
+  hostId: PlayerId | null = null;
+  state: 'lobby' | 'playing' | 'ended' = 'lobby';
+
+  private timer: NodeJS.Timeout | null = null;
+  private accumulator = 0;
+  private lastTime = 0;
+  private nextPlayerId = 1;
+  private seed = 0;
+
+  /** Rolling stats for the dev overlay and the §5 budget check. */
+  stats = { tickMs: 0, snapshotBytes: 0, entities: 0 };
+
+  /**
+   * Written out rather than a `private readonly send: Broadcast` parameter
+   * property: Node's --experimental-strip-types runs in strip-only mode, which
+   * rejects parameter properties because they emit real code.
+   */
+  private readonly send: Broadcast;
+
+  constructor(send: Broadcast) {
+    this.send = send;
+  }
+
+  // ── membership ────────────────────────────────────────────────────────────
+
+  join(name: string, reconnectToken?: string): RoomMember {
+    if (reconnectToken) {
+      for (const m of this.members.values()) {
+        if (m.reconnectToken === reconnectToken) {
+          m.connected = true;
+          m.disconnectedAt = null;
+          m.name = name || m.name;
+          return m;
+        }
+      }
+    }
+
+    const id = this.nextPlayerId++;
+    const member: RoomMember = {
+      id,
+      name: name || `Player ${id}`,
+      ready: false,
+      connected: true,
+      reconnectToken: `${id}-${Math.random().toString(36).slice(2, 10)}`,
+      input: { seq: 0, dirX: 0, dirY: 0 },
+      lastSent: new Map(),
+      lastFullTick: -Infinity,
+      disconnectedAt: null,
+    };
+    this.members.set(id, member);
+    if (this.hostId === null) this.hostId = id;
+
+    // A player who arrives mid-match spectates until the next round (§2.6).
+    if (this.state === 'playing' && this.world) {
+      member.ready = true;
+    }
+    return member;
+  }
+
+  markDisconnected(id: PlayerId): void {
+    const m = this.members.get(id);
+    if (!m) return;
+    m.connected = false;
+    m.disconnectedAt = Date.now();
+
+    // In the lobby there is no squad worth preserving, so drop them outright.
+    if (this.state !== 'playing') {
+      this.members.delete(id);
+      if (this.hostId === id) this.hostId = this.members.keys().next().value ?? null;
+    }
+  }
+
+  setInput(id: PlayerId, input: InputCommand): void {
+    const m = this.members.get(id);
+    if (!m) return;
+    // Ignore stale/replayed inputs; UDP-like reordering can't happen on a
+    // WebSocket but a reconnect can replay an old seq.
+    if (input.seq < m.input.seq) return;
+    m.input = input;
+  }
+
+  setReady(id: PlayerId, ready: boolean): void {
+    const m = this.members.get(id);
+    if (m) m.ready = ready;
+  }
+
+  lobbyPayload() {
+    return {
+      t: 'lobby' as const,
+      hostId: this.hostId ?? 0,
+      players: [...this.members.values()].map((m) => ({
+        id: m.id,
+        name: m.name,
+        ready: m.ready,
+        connected: m.connected,
+      })),
+    };
+  }
+
+  // ── match lifecycle ───────────────────────────────────────────────────────
+
+  start(): void {
+    if (this.state === 'playing') return;
+    const participants = [...this.members.values()].filter((m) => m.connected);
+    if (participants.length === 0) return;
+
+    this.seed = (Math.random() * 0xffffffff) >>> 0;
+    this.world = new World(this.seed, participants.length);
+    for (const m of participants) {
+      this.world.addPlayer(m.id, m.name);
+      m.lastSent.clear();
+      m.lastFullTick = -Infinity;
+    }
+    this.world.start();
+    this.state = 'playing';
+
+    const assignments = [...this.world.players.values()].map((p) => ({
+      id: p.id,
+      index: p.index,
+      name: p.name,
+    }));
+
+    for (const m of this.members.values()) {
+      this.send(m.id, {
+        t: 'start',
+        seed: this.seed,
+        tick0: 0,
+        playerCount: participants.length,
+        assignments,
+      });
+      this.send(m.id, this.mapPayload());
+    }
+
+    this.startLoop();
+  }
+
+  mapPayload() {
+    if (!this.world) return { t: 'map' as const, size: 0, tiles: '', homePads: [] };
+    return {
+      t: 'map' as const,
+      size: this.world.map.size,
+      tiles: Buffer.from(this.world.map.tiles).toString('base64'),
+      homePads: this.world.map.homePads,
+    };
+  }
+
+  /** Reset to lobby for a rematch without restarting the host process (§M6). */
+  reset(): void {
+    this.stopLoop();
+    this.world = null;
+    this.state = 'lobby';
+    for (const m of this.members.values()) {
+      m.ready = false;
+      m.lastSent.clear();
+      m.input = { seq: 0, dirX: 0, dirY: 0 };
+    }
+  }
+
+  private startLoop(): void {
+    this.stopLoop();
+    this.lastTime = performance.now();
+    this.accumulator = 0;
+    // A 5ms timer with an accumulator rather than a 50ms interval: setInterval
+    // drifts, and the sim must advance in exact fixed steps.
+    this.timer = setInterval(() => this.pump(), 5);
+  }
+
+  private stopLoop(): void {
+    if (this.timer) clearInterval(this.timer);
+    this.timer = null;
+  }
+
+  private pump(): void {
+    const now = performance.now();
+    let frame = (now - this.lastTime) / 1000;
+    this.lastTime = now;
+    // Clamp so a stalled host (laptop lid, GC pause) doesn't try to catch up
+    // by running hundreds of ticks in one burst.
+    if (frame > 0.25) frame = 0.25;
+    this.accumulator += frame;
+
+    while (this.accumulator >= TICK_DT) {
+      this.accumulator -= TICK_DT;
+      this.step();
+    }
+  }
+
+  private step(): void {
+    const world = this.world;
+    if (!world) return;
+
+    this.dropExpiredReconnects();
+
+    const inputs = new Map<PlayerId, InputCommand>();
+    for (const m of this.members.values()) {
+      if (m.connected) inputs.set(m.id, m.input);
+    }
+
+    const t0 = performance.now();
+    world.tick(inputs);
+    this.stats.tickMs = performance.now() - t0;
+    this.stats.entities = world.store.liveCount;
+
+    // Chest choices are one-shot: clear after the tick that consumed them so
+    // the player doesn't buy three chests from one tap.
+    for (const m of this.members.values()) {
+      if (m.input.chestChoice !== undefined) {
+        m.input = { ...m.input, chestChoice: undefined };
+      }
+    }
+
+    this.broadcastSnapshots(world.events);
+
+    if (world.phase === 'ended') {
+      this.state = 'ended';
+      this.stopLoop();
+      const standings = world.standings();
+      for (const m of this.members.values()) this.send(m.id, { t: 'end', standings });
+    }
+  }
+
+  private dropExpiredReconnects(): void {
+    const graceMs = MATCH.reconnectGraceSeconds * 1000;
+    const now = Date.now();
+    for (const [id, m] of this.members) {
+      if (m.connected || m.disconnectedAt === null) continue;
+      if (now - m.disconnectedAt < graceMs) continue;
+      this.world?.removePlayer(id);
+      this.members.delete(id);
+      if (this.hostId === id) this.hostId = this.members.keys().next().value ?? null;
+    }
+  }
+
+  // ── snapshots ─────────────────────────────────────────────────────────────
+
+  private entityWire(e: {
+    id: number;
+    kind: string;
+    x: number;
+    y: number;
+    team: number;
+    unitType: string | null;
+    tier: number;
+    hp: number;
+    maxHp: number;
+    value: number;
+  }): EntityWire {
+    return {
+      i: e.id,
+      k: KIND_INDEX.get(e.kind as never) ?? 0,
+      // Quantise to 1/100 tile: sub-centimetre precision is invisible at this
+      // zoom and costs several bytes per entity per tick in JSON.
+      x: Math.round(e.x * 100) / 100,
+      y: Math.round(e.y * 100) / 100,
+      tm: e.team,
+      u: e.unitType ? (UNIT_INDEX.get(e.unitType as never) ?? -1) : -1,
+      tr: e.tier as 0 | 1 | 2,
+      h: e.maxHp > 0 ? Math.round((e.hp / e.maxHp) * 255) : 0,
+      v: e.value,
+    };
+  }
+
+  private broadcastSnapshots(events: WorldEvent[]): void {
+    const world = this.world;
+    if (!world) return;
+
+    const current = new Map<number, EntityWire>();
+    for (const e of world.store.items) {
+      if (!e.alive) continue;
+      current.set(e.id, this.entityWire(e));
+    }
+
+    const players: PlayerWire[] = [...world.players.values()].map((p) => ({
+      id: p.id,
+      g: p.gems,
+      p: p.nextChestPrice,
+      wiped: p.wiped,
+      ...(p.offer ? { offer: p.offer } : {}),
+    }));
+
+    let measured = 0;
+    for (const m of this.members.values()) {
+      if (!m.connected) continue;
+
+      const wantFull = world.tickNumber - m.lastFullTick >= FULL_SNAPSHOT_INTERVAL;
+      const entities: EntityWire[] = [];
+      const removed: number[] = [];
+
+      if (wantFull) {
+        for (const wire of current.values()) entities.push(wire);
+        m.lastFullTick = world.tickNumber;
+      } else {
+        for (const [id, wire] of current) {
+          const prev = m.lastSent.get(id);
+          if (!prev || !sameWire(prev, wire)) entities.push(wire);
+        }
+        for (const id of m.lastSent.keys()) {
+          if (!current.has(id)) removed.push(id);
+        }
+      }
+
+      const snap: SnapshotMsg = {
+        t: 'snap',
+        tick: world.tickNumber,
+        ackSeq: m.input.seq,
+        time: world.timeRemaining,
+        phase: world.phase,
+        full: wantFull,
+        entities,
+        removed,
+        players,
+        events,
+      };
+
+      const payload = JSON.stringify(snap);
+      if (measured === 0) measured = payload.length;
+      this.send(m.id, payload);
+
+      m.lastSent = current;
+    }
+    this.stats.snapshotBytes = measured;
+  }
+}
+
+/** Cheap field-wise compare; the delta only needs to know "did anything move". */
+function sameWire(a: EntityWire, b: EntityWire): boolean {
+  return (
+    a.x === b.x &&
+    a.y === b.y &&
+    a.h === b.h &&
+    a.tr === b.tr &&
+    a.u === b.u &&
+    a.tm === b.tm &&
+    a.v === b.v
+  );
+}
+
+export const TICKS_PER_SECOND = TICK_RATE;

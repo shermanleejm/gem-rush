@@ -1,0 +1,13 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": ["vite/client"],
+    "noEmit": true,
+    // Vite resolves .ts specifiers directly; no emit step needs them rewritten.
+    "allowImportingTsExtensions": true,
+    "jsx": "preserve"
+  },
+  "include": ["src", "vite.config.ts"]
+}

@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // No DOM lib and no ambient @types. This is the mechanical enforcement of
+    // the "shared/sim runs headless" rule from the brief: a stray `document.`
+    // or `process.` reference in this package is a compile error, not a code
+    // review catch.
+    "lib": ["ES2022"],
+    "types": [],
+    // Consumed as raw source by both the host (node --experimental-strip-types)
+    // and the client (Vite), so imports carry .ts and nothing is ever emitted.
+    "allowImportingTsExtensions": true,
+    "noEmit": true
+  },
+  "include": ["src"]
+}
