@@ -57,7 +57,7 @@ export function showJoin(
   input.type = 'text';
   input.id = 'name';
   input.maxLength = 16;
-  input.placeholder = 'e.g. Sherman';
+  input.placeholder = 'e.g. Ace';
   input.value = localStorage.getItem('sa-name') ?? '';
   card.append(label, input);
 
