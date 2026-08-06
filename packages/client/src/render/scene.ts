@@ -21,8 +21,15 @@ import { MAP, TILE_WALL, UNIT_DEFS, type UnitType } from '@gem-rush/shared';
 import type { ViewEntity } from '../net/connection.ts';
 import { buildSpriteAtlas, type SpriteAtlas } from './sprites.ts';
 
-/** Screen pixels per world tile at zoom 1. */
-const BASE_SCALE = 34;
+/**
+ * Screen pixels per world tile at zoom 1.
+ *
+ * Raised from 34: at the old scale a unit was about 20px across, which is too
+ * small for its silhouette and shading to read at all — and far too small on a
+ * phone. The cost is seeing slightly less of the arena, which the minimap
+ * already covers.
+ */
+const BASE_SCALE = 44;
 
 const TEAM_COLORS = [
   0x4da3ff, 0xff7a59, 0x56d9a3, 0xffc857, 0xb98bff, 0xff6bb5, 0x5ee0e0, 0xa3d94d,
@@ -34,6 +41,7 @@ export class Scene {
   ready = false;
   readonly world = new Container();
   readonly terrainLayer = new Container();
+  readonly shadowLayer = new Container();
   readonly propLayer = new Container();
   readonly entityLayer = new Container();
   readonly effectLayer = new Container();
@@ -42,12 +50,16 @@ export class Scene {
 
   private pool: Sprite[] = [];
   private active: Sprite[] = [];
+  private shadowPool: Sprite[] = [];
+  private shadows: Sprite[] = [];
   private effects: { s: Sprite; life: number; max: number; vx: number; vy: number }[] = [];
   private effectPool: Sprite[] = [];
 
   private camX = MAP.size / 2;
   private camY = MAP.size / 2;
   private cameraPlaced = false;
+  /** Seconds since the scene started; drives idle animation. */
+  private time = 0;
   private zoom = 1;
   private targetZoom = 1;
 
@@ -68,7 +80,13 @@ export class Scene {
     });
     mount.appendChild(this.app.canvas);
 
-    this.world.addChild(this.terrainLayer, this.propLayer, this.entityLayer, this.effectLayer);
+    this.world.addChild(
+      this.terrainLayer,
+      this.shadowLayer,
+      this.propLayer,
+      this.entityLayer,
+      this.effectLayer,
+    );
     this.app.stage.addChild(this.world);
 
     this.buildTextures();
@@ -142,6 +160,17 @@ export class Scene {
     this.terrainLayer.addChild(rim);
   }
 
+  private takeShadow(): Sprite {
+    const s = this.shadowPool.pop() ?? new Sprite();
+    s.visible = true;
+    s.anchor.set(0.5);
+    s.texture = this.atlas.shadow;
+    s.tint = 0xffffff;
+    this.shadows.push(s);
+    this.shadowLayer.addChild(s);
+    return s;
+  }
+
   private take(): Sprite {
     const s = this.pool.pop() ?? new Sprite();
     s.visible = true;
@@ -152,6 +181,13 @@ export class Scene {
 
   /** Return every sprite to the pool. Called once per frame before redraw. */
   private releaseAll(): void {
+    for (const s of this.shadows) {
+      s.visible = false;
+      if (s.parent) s.parent.removeChild(s);
+      this.shadowPool.push(s);
+    }
+    this.shadows.length = 0;
+
     for (const s of this.active) {
       s.visible = false;
       if (s.parent) s.parent.removeChild(s);
@@ -175,6 +211,7 @@ export class Scene {
     dt: number,
   ): void {
     this.releaseAll();
+    this.time += dt;
 
     // Camera: follow with a soft lerp, zoom out as the squad grows so a big
     // blob stays framed (§2.7).
@@ -190,7 +227,7 @@ export class Scene {
         this.camY += (localLeader.y - this.camY) * Math.min(1, dt * 8);
       }
     }
-    this.targetZoom = Math.max(0.62, 1 - squadSize * 0.022);
+    this.targetZoom = Math.max(0.72, 1 - squadSize * 0.016);
     this.zoom += (this.targetZoom - this.zoom) * Math.min(1, dt * 3);
 
     const scale = BASE_SCALE * this.zoom;
@@ -234,11 +271,14 @@ export class Scene {
     const s = this.take();
 
     switch (e.kind) {
-      case 'gem':
+      case 'gem': {
         s.texture = this.atlas.gem;
         s.tint = 0x56d9a3;
-        s.width = s.height = 0.44;
+        // Gentle pulse so loose gems catch the eye against a busy floor.
+        const pulse = 1 + Math.sin(this.time * 5 + e.id) * 0.07;
+        s.width = s.height = 0.46 * pulse;
         break;
+      }
       case 'prop':
         s.texture = this.atlas.prop;
         s.tint = 0x8a6f4f;
@@ -269,7 +309,7 @@ export class Scene {
         const def = e.unitType ? UNIT_DEFS[e.unitType as UnitType] : null;
         s.texture = e.unitType ? this.atlas[e.unitType as UnitType] : this.atlas.striker;
         s.tint = def ? def.color : 0xffffff;
-        const size = (def ? def.radius : 0.3) * 2.2 * (1 + e.tier * 0.26);
+        const size = (def ? def.radius : 0.3) * 2.5 * (1 + e.tier * 0.26);
         s.width = s.height = size;
         break;
       }
@@ -281,14 +321,40 @@ export class Scene {
 
     // The local leader renders at its predicted position, not the interpolated
     // one — that is the whole point of prediction.
+    let px = e.x;
+    let py = e.y;
     if (e.kind === 'leader' && localLeader && e.team === this.localTeam) {
-      s.x = localLeader.x;
-      s.y = localLeader.y;
-    } else {
-      s.x = e.x;
-      s.y = e.y;
+      px = localLeader.x;
+      py = localLeader.y;
     }
 
+    const size = Number(s.width);
+
+    // Ground shadow before any vertical animation, so the sprite bobs *above*
+    // its shadow rather than dragging it along — that separation is most of
+    // what sells the motion.
+    if (e.kind === 'unit' || e.kind === 'creep' || e.kind === 'leader') {
+      const sh = this.takeShadow();
+      sh.x = px;
+      sh.y = py + size * 0.38;
+      sh.width = size * 0.85;
+      sh.height = size * 0.42;
+    }
+
+    // Idle bob, offset per entity so a squad breathes rather than pulsing in
+    // lockstep. Gems get a bigger, faster bounce because they are the reward.
+    let bob = 0;
+    if (e.kind === 'unit' || e.kind === 'creep') {
+      bob = Math.sin(this.time * 4 + e.id * 1.7) * size * 0.045;
+    } else if (e.kind === 'gem') {
+      bob = Math.sin(this.time * 5 + e.id) * 0.09;
+      s.rotation = Math.sin(this.time * 2.2 + e.id) * 0.25;
+    } else if (e.kind === 'chest') {
+      bob = Math.sin(this.time * 2.4 + e.id) * 0.05;
+    }
+
+    s.x = px;
+    s.y = py + bob;
     this.entityLayer.addChild(s);
 
     // Damage tint: cheaper and more readable at this size than an HP bar.
@@ -303,8 +369,8 @@ export class Scene {
         const ring = this.take();
         ring.texture = this.atlas.ring;
         ring.tint = e.tier === 2 ? 0xffe27a : 0xd8d8d8;
-        ring.width = ring.height = Number(s.width) * 1.32;
-        ring.alpha = 0.35;
+        ring.width = ring.height = Number(s.width) * 1.34;
+        ring.alpha = 0.45;
         ring.x = s.x;
         ring.y = s.y;
         this.entityLayer.addChildAt(ring, Math.max(0, this.entityLayer.children.length - 1));

@@ -7,9 +7,14 @@
  * budgets 2MB including the atlas — this contributes zero bytes), and lets a
  * silhouette change be a code edit rather than an asset pipeline.
  *
- * Bodies are drawn white so the renderer can tint them per archetype and per
- * team; role glyphs are drawn in translucent black, so tinting darkens them
- * with the body and they stay legible against any hue.
+ * Shading survives tinting because tint *multiplies*. Bodies are drawn in a
+ * mid grey rather than white, so a lighter top highlight and a darker bottom
+ * shade both survive the multiply and every unit reads as a rounded form in
+ * whatever colour its team happens to be. Drawing the body white would flatten
+ * all of that to a single flat fill.
+ *
+ * Role glyphs stay translucent black so they darken with the body and remain
+ * legible against any hue.
  */
 
 import { Graphics, type Renderer, type Texture } from 'pixi.js';
@@ -19,7 +24,23 @@ import { UNIT_TYPES, type UnitType } from '@gem-rush/shared';
 /** Texture resolution. Sprites render around 30px, so 64 is ample. */
 const S = 64;
 const C = S / 2;
-const GLYPH = { color: 0x000000, alpha: 0.42 };
+const GLYPH = { color: 0x000000, alpha: 0.45 };
+
+/**
+ * Shading ramp. BASE is deliberately below white so HILIGHT can read as
+ * brighter than the tint and SHADE as darker — the whole reason the sprites
+ * have any sense of volume.
+ */
+const BASE = 0xc8c8c8;
+const HILIGHT = 0xffffff;
+const SHADE = 0x8a8a8a;
+const OUTLINE = { color: 0x2b2b2b, alpha: 0.55 };
+
+/** Lower half darkened, upper arc lit — a cheap stand-in for a light from above. */
+function shadeRound(g: Graphics, r: number): void {
+  g.circle(C, C + r * 0.26, r * 0.82).fill({ color: SHADE, alpha: 0.55 });
+  g.circle(C, C - r * 0.3, r * 0.6).fill({ color: HILIGHT, alpha: 0.5 });
+}
 
 export type SpriteKey =
   | UnitType
@@ -30,25 +51,43 @@ export type SpriteKey =
   | 'node'
   | 'chest'
   | 'ring'
-  | 'spark';
+  | 'spark'
+  | 'shadow';
 
 export type SpriteAtlas = Record<SpriteKey, Texture>;
 
 // ── silhouettes ─────────────────────────────────────────────────────────────
 
 function circleBody(g: Graphics, r = 27): Graphics {
-  return g.circle(C, C, r).fill(0xffffff);
+  g.circle(C, C, r).fill(BASE);
+  shadeRound(g, r);
+  g.circle(C, C, r).stroke({ ...OUTLINE, width: 2.5, alignment: 0.5 });
+  return g;
 }
 
 function diamondBody(g: Graphics, r = 29): Graphics {
-  return g.poly([C, C - r, C + r, C, C, C + r, C - r, C]).fill(0xffffff);
+  const pts = [C, C - r, C + r, C, C, C + r, C - r, C];
+  g.poly(pts).fill(BASE);
+  g.poly([C, C, C + r, C, C, C + r, C - r, C]).fill({ color: SHADE, alpha: 0.5 });
+  g.poly([C, C - r, C + r * 0.5, C - r * 0.5, C, C, C - r * 0.5, C - r * 0.5]).fill({
+    color: HILIGHT,
+    alpha: 0.45,
+  });
+  g.poly(pts).stroke({ ...OUTLINE, width: 2.5, alignment: 0.5 });
+  return g;
 }
 
 function shieldBody(g: Graphics): Graphics {
   // Flat-topped shield: reads as "tank" at a glance, distinct from a circle.
-  return g
-    .poly([C - 25, C - 22, C + 25, C - 22, C + 25, C + 6, C, C + 28, C - 25, C + 6])
-    .fill(0xffffff);
+  const pts = [C - 25, C - 22, C + 25, C - 22, C + 25, C + 6, C, C + 28, C - 25, C + 6];
+  g.poly(pts).fill(BASE);
+  g.poly([C - 25, C + 2, C + 25, C + 2, C + 25, C + 6, C, C + 28, C - 25, C + 6]).fill({
+    color: SHADE,
+    alpha: 0.55,
+  });
+  g.rect(C - 25, C - 22, 50, 9).fill({ color: HILIGHT, alpha: 0.4 });
+  g.poly(pts).stroke({ ...OUTLINE, width: 2.5, alignment: 0.5 });
+  return g;
 }
 
 function hexBody(g: Graphics, r = 27): Graphics {
@@ -57,15 +96,36 @@ function hexBody(g: Graphics, r = 27): Graphics {
     const a = (i / 6) * Math.PI * 2 - Math.PI / 2;
     pts.push(C + Math.cos(a) * r, C + Math.sin(a) * r);
   }
-  return g.poly(pts).fill(0xffffff);
+  g.poly(pts).fill(BASE);
+  shadeRound(g, r);
+  g.poly(pts).stroke({ ...OUTLINE, width: 2.5, alignment: 0.5 });
+  return g;
 }
 
 function triangleBody(g: Graphics, r = 29): Graphics {
-  return g.poly([C, C - r, C + r * 0.9, C + r * 0.7, C - r * 0.9, C + r * 0.7]).fill(0xffffff);
+  const pts = [C, C - r, C + r * 0.9, C + r * 0.7, C - r * 0.9, C + r * 0.7];
+  g.poly(pts).fill(BASE);
+  g.poly([C, C + r * 0.1, C + r * 0.9, C + r * 0.7, C - r * 0.9, C + r * 0.7]).fill({
+    color: SHADE,
+    alpha: 0.5,
+  });
+  g.poly([C, C - r, C + r * 0.35, C - r * 0.2, C - r * 0.35, C - r * 0.2]).fill({
+    color: HILIGHT,
+    alpha: 0.45,
+  });
+  g.poly(pts).stroke({ ...OUTLINE, width: 2.5, alignment: 0.5 });
+  return g;
 }
 
 function roundedBody(g: Graphics, r = 24): Graphics {
-  return g.roundRect(C - r, C - r, r * 2, r * 2, 8).fill(0xffffff);
+  g.roundRect(C - r, C - r, r * 2, r * 2, 8).fill(BASE);
+  g.roundRect(C - r, C + r * 0.15, r * 2, r * 0.85, 8).fill({ color: SHADE, alpha: 0.5 });
+  g.roundRect(C - r * 0.8, C - r * 0.8, r * 1.6, r * 0.5, 6).fill({
+    color: HILIGHT,
+    alpha: 0.42,
+  });
+  g.roundRect(C - r, C - r, r * 2, r * 2, 8).stroke({ ...OUTLINE, width: 2.5, alignment: 0.5 });
+  return g;
 }
 
 // ── role glyphs ─────────────────────────────────────────────────────────────
@@ -150,10 +210,13 @@ const UNIT_ART: Record<UnitType, (g: Graphics) => void> = {
 
 function leaderArt(g: Graphics): void {
   // A ring so the leader reads as a cursor rather than another unit, with a
-  // solid core so it stays visible when the squad crowds around it.
-  g.circle(C, C, 28).fill(0xffffff);
+  // solid core so it stays visible when the squad crowds around it. Kept near
+  // white — this one wants to be the brightest thing on screen.
+  g.circle(C, C, 29).stroke({ ...OUTLINE, width: 3, alignment: 0.5 });
+  g.circle(C, C, 28).fill(HILIGHT);
   g.circle(C, C, 20).cut();
-  g.circle(C, C, 11).fill(0xffffff);
+  g.circle(C, C, 12).stroke({ ...OUTLINE, width: 3, alignment: 0.5 });
+  g.circle(C, C, 11).fill(HILIGHT);
 }
 
 function creepArt(g: Graphics): void {
@@ -165,36 +228,64 @@ function creepArt(g: Graphics): void {
     const r = i % 2 === 0 ? 27 : 18;
     pts.push(C + Math.cos(a) * r, C + Math.sin(a) * r);
   }
-  g.poly(pts).fill(0xffffff);
-  g.circle(C, C, 7).fill(GLYPH);
+  g.poly(pts).fill(BASE);
+  g.circle(C, C + 5, 16).fill({ color: SHADE, alpha: 0.55 });
+  g.circle(C, C - 6, 12).fill({ color: HILIGHT, alpha: 0.45 });
+  g.poly(pts).stroke({ ...OUTLINE, width: 2, alignment: 0.5 });
+  // Two eyes rather than one blob: reads as a creature, not a cog.
+  g.circle(C - 6, C - 2, 3.4).fill(GLYPH);
+  g.circle(C + 6, C - 2, 3.4).fill(GLYPH);
 }
 
 function gemArt(g: Graphics): void {
-  g.poly([C, C - 26, C + 20, C - 4, C, C + 26, C - 20, C - 4]).fill(0xffffff);
-  // Facet line gives it a read of depth at 12px on screen.
-  g.poly([C, C - 26, C + 20, C - 4, C, C + 2, C - 20, C - 4]).fill({
-    color: 0xffffff,
-    alpha: 0.45,
-  });
+  const outline = [C, C - 26, C + 20, C - 4, C, C + 26, C - 20, C - 4];
+  g.poly(outline).fill(BASE);
+  // Cut facets: left face shaded, right face lit, crown brightest. A gem is the
+  // thing the whole game is about, so it gets the most attention per pixel.
+  g.poly([C, C - 26, C, C + 26, C - 20, C - 4]).fill({ color: SHADE, alpha: 0.55 });
+  g.poly([C, C - 26, C + 20, C - 4, C, C + 2]).fill({ color: HILIGHT, alpha: 0.75 });
+  g.poly([C, C - 26, C + 8, C - 12, C - 8, C - 12]).fill({ color: HILIGHT, alpha: 0.95 });
+  g.poly(outline).stroke({ ...OUTLINE, width: 2.5, alignment: 0.5 });
 }
 
 function propArt(g: Graphics): void {
-  g.roundRect(6, 6, S - 12, S - 12, 6).fill(0xffffff);
-  g.rect(6, C - 3, S - 12, 6).fill(GLYPH);
-  g.rect(C - 3, 6, 6, S - 12).fill(GLYPH);
+  // A crate: planks, a lit top edge, and a shaded base.
+  g.roundRect(6, 6, S - 12, S - 12, 6).fill(BASE);
+  g.roundRect(6, C, S - 12, C - 6, 6).fill({ color: SHADE, alpha: 0.45 });
+  g.roundRect(9, 9, S - 18, 12, 4).fill({ color: HILIGHT, alpha: 0.35 });
+  g.rect(6, C - 4, S - 12, 8).fill({ color: 0x000000, alpha: 0.32 });
+  g.rect(C - 4, 6, 8, S - 12).fill({ color: 0x000000, alpha: 0.32 });
+  g.roundRect(6, 6, S - 12, S - 12, 6).stroke({ ...OUTLINE, width: 3, alignment: 0.5 });
 }
 
 function nodeArt(g: Graphics): void {
-  // Crystal cluster: three shards, so it is distinguishable from a loose gem.
-  g.poly([C, 4, C + 14, C + 6, C, C + 22, C - 14, C + 6]).fill(0xffffff);
-  g.poly([C - 20, C + 2, C - 10, C + 20, C - 26, C + 20]).fill({ color: 0xffffff, alpha: 0.8 });
-  g.poly([C + 20, C + 2, C + 26, C + 20, C + 10, C + 20]).fill({ color: 0xffffff, alpha: 0.8 });
+  // Crystal cluster: three faceted shards, distinguishable from a loose gem.
+  const side = (x: number, dir: number): void => {
+    const pts = [x, C + 2, x + 6 * dir, C + 20, x - 6 * dir, C + 20];
+    g.poly(pts).fill(BASE);
+    g.poly(pts).stroke({ ...OUTLINE, width: 2, alignment: 0.5 });
+    g.poly([x, C + 2, x + 6 * dir, C + 20, x, C + 20]).fill({ color: SHADE, alpha: 0.5 });
+  };
+  side(C - 20, -1);
+  side(C + 20, 1);
+
+  const main = [C, 4, C + 14, C + 6, C, C + 22, C - 14, C + 6];
+  g.poly(main).fill(BASE);
+  g.poly([C, 4, C, C + 22, C - 14, C + 6]).fill({ color: SHADE, alpha: 0.5 });
+  g.poly([C, 4, C + 14, C + 6, C, C + 12]).fill({ color: HILIGHT, alpha: 0.7 });
+  g.poly(main).stroke({ ...OUTLINE, width: 2.5, alignment: 0.5 });
 }
 
 function chestArt(g: Graphics): void {
-  g.roundRect(6, 14, S - 12, S - 22, 5).fill(0xffffff);
-  g.rect(6, 24, S - 12, 6).fill(GLYPH);
-  g.roundRect(C - 6, C + 2, 12, 12, 2).fill(GLYPH);
+  // Domed lid, banded body, keyhole plate.
+  g.roundRect(6, 20, S - 12, S - 26, 5).fill(BASE);
+  g.roundRect(6, C + 6, S - 12, C - 12, 5).fill({ color: SHADE, alpha: 0.45 });
+  g.roundRect(4, 12, S - 8, 18, 8).fill(BASE);
+  g.roundRect(7, 14, S - 14, 7, 5).fill({ color: HILIGHT, alpha: 0.5 });
+  g.rect(6, 30, S - 12, 5).fill({ color: 0x000000, alpha: 0.35 });
+  g.roundRect(C - 7, C + 4, 14, 14, 3).fill({ color: HILIGHT, alpha: 0.55 });
+  g.circle(C, C + 11, 3.2).fill(GLYPH);
+  g.roundRect(4, 12, S - 8, S - 18, 6).stroke({ ...OUTLINE, width: 3, alignment: 0.5 });
 }
 
 function ringArt(g: Graphics): void {
@@ -205,6 +296,20 @@ function ringArt(g: Graphics): void {
 
 function sparkArt(g: Graphics): void {
   g.circle(C, C, 14).fill(0xffffff);
+}
+
+/**
+ * Contact shadow, drawn under every mobile entity.
+ *
+ * Concentric rings of decreasing alpha rather than a single ellipse: a hard
+ * edged blob reads as a black disc stuck to the floor, whereas a soft falloff
+ * grounds the sprite. Cheap enough to bake once and reuse for everything.
+ */
+function shadowArt(g: Graphics): void {
+  for (let i = 6; i >= 1; i--) {
+    const t = i / 6;
+    g.ellipse(C, C, 26 * t, 13 * t).fill({ color: 0x000000, alpha: 0.075 });
+  }
 }
 
 // ── build ───────────────────────────────────────────────────────────────────
@@ -230,5 +335,6 @@ export function buildSpriteAtlas(renderer: Renderer): SpriteAtlas {
   atlas.chest = bake(renderer, chestArt);
   atlas.ring = bake(renderer, ringArt);
   atlas.spark = bake(renderer, sparkArt);
+  atlas.shadow = bake(renderer, shadowArt);
   return atlas;
 }
