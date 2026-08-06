@@ -13,134 +13,41 @@ squad is built by spending the very resource you're scored on.
 
 ## Play
 
-One person hosts. Everyone else just opens a link.
+**Everyone just opens the site.** One person clicks *Host a game* and gets a
+five-character room code; everyone else types it in, or taps the invite link.
+Nothing to install, no accounts, and nobody has to run a server.
+
+The game is hosted by the **host's browser tab**. That tab runs the
+authoritative simulation and every other player connects straight to it over
+WebRTC. So one rule matters: **the host has to keep their tab open**, and if
+they close it the match ends.
+
+### If peer-to-peer fails
+
+A minority of networks block direct browser-to-browser connections. WebRTC
+needs to find a path between two machines, and behind strict or symmetric NAT
+that requires a TURN relay, which costs money to run and so isn't provided
+here. Expect roughly 85–90% of pairs to connect.
+
+If someone can't join, the fallback is the downloadable host, which is a plain
+web server and works anywhere on a LAN:
 
 ```bash
 npx squad-arena
 ```
 
-That is the whole install. It needs [Node.js](https://nodejs.org) 20 or newer
-and nothing else — no accounts, no game client, no configuration.
+That prints a LAN URL, a public IP, and a tunnel command. Everyone opens the
+URL and plays — no room codes, no WebRTC.
 
 <details>
-<summary>Running from a clone instead</summary>
+<summary>Running from a clone</summary>
 
 ```bash
 pnpm install
 pnpm build
-pnpm host
+pnpm host          # Node host on :8080
 ```
 </details>
-
-The host prints everything needed to invite people:
-
-```
-  On this machine
-    http://localhost:8080
-
-  Same Wi-Fi / LAN — share this with friends in the room
-    http://192.168.0.9:8080
-
-  Can't port-forward? Run this in another terminal:
-    cloudflared tunnel --url http://localhost:8080
-```
-
-Everyone — including the host — plays in a normal browser tab.
-
-### Getting friends connected
-
-| Situation | What to share |
-|---|---|
-| Same Wi-Fi | The `http://192.168.x.x:8080` line the host prints. Works immediately. |
-| Over the internet, you can port-forward | Forward **TCP 8080** to the host machine, then share the public IP line. |
-| Over the internet, you can't port-forward | Run `cloudflared tunnel --url http://localhost:8080` and share the `https://` URL it prints. No router setup. |
-
-Not being able to port-forward is the single most likely reason a group fails to
-play, which is why the tunnel command is printed on every boot.
-
-**The host quitting ends the match.** There is no host migration in v1.
-
-### Playing over the internet
-
-You have two options. **Try the tunnel first** — it works everywhere and takes
-about a minute. Port forwarding is faster once set up but every router's menus
-are different.
-
-#### Option A — a tunnel (recommended, no router access needed)
-
-Install [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/),
-then in a *second* terminal while the host is running:
-
-```bash
-cloudflared tunnel --url http://localhost:8080
-```
-
-It prints a URL like `https://random-words-here.trycloudflare.com`. Share that.
-It works from anywhere, needs no router changes, and gives you HTTPS for free.
-The URL dies when you stop cloudflared, so generate a fresh one each session.
-
-#### Option B — port forwarding
-
-You are telling your router "traffic arriving on port 8080 goes to my computer".
-
-1. **Find your router's address.** On Windows run `ipconfig` and use the
-   "Default Gateway" line — usually `192.168.0.1` or `192.168.1.1`. Open it in
-   a browser.
-2. **Log in.** The password is often printed on a sticker on the router itself.
-3. **Find the port forwarding page.** It hides under different names depending
-   on the brand: *Port Forwarding*, *Virtual Server*, *NAT*, *Applications &
-   Gaming*, or under an *Advanced* tab.
-4. **Add a rule:**
-   - External / public port: `8080`
-   - Internal / private port: `8080`
-   - Protocol: `TCP`
-   - Internal IP: the LAN address the host printed (e.g. `192.168.0.9`)
-5. **Save**, then share the public-IP URL the host printed.
-
-Two things that catch people out: most home broadband gives you a *dynamic*
-public IP, so it can change and the link stops working; and some ISPs use
-CGNAT, where port forwarding cannot work at all no matter what you configure.
-If forwarding looks correct but nobody can connect, it is probably CGNAT — use
-the tunnel.
-
-## It doesn't work
-
-**Nobody can reach me on the same Wi-Fi.**
-Check they typed `http://` and not `https://`, and the right port. If it still
-fails it is almost always the host's firewall — on Windows, the first run pops
-a "Windows Defender Firewall has blocked some features" dialog and you must
-allow it on **private networks**. If you dismissed it, allow Node manually
-under Settings → Network & Internet → Windows Firewall → Allow an app. Also
-confirm both devices are on the same network: many homes have separate 2.4GHz
-and 5GHz SSIDs, and a "Guest" network usually blocks device-to-device traffic
-entirely.
-
-**"Port 8080 is already in use".**
-Something else is on that port. Run with a different one:
-`PORT=8081 npx squad-arena` (PowerShell: `$env:PORT=8081; npx squad-arena`).
-Remember to share the new port number too.
-
-**The page loads but stays on "Connecting…".**
-The HTTP side works and the WebSocket does not, which usually means a proxy or
-corporate network stripping the upgrade. Try the tunnel, or a phone on mobile
-data to confirm.
-
-**It works for me but not over the internet.**
-The LAN address (`192.168.x.x`) only works inside your house. You need Option A
-or Option B above.
-
-**Everything is laggy for one player.**
-Press `~` to open the dev overlay and read their RTT and jitter. The host's
-*upload* speed is the shared bottleneck: eight players is roughly 100 KB/s up.
-If the host is on slow broadband, fewer players will help.
-
-**The host closed their laptop and the game died.**
-Expected. The host runs the simulation, so the match ends with it. There is no
-host migration.
-
-**A player dropped mid-match.**
-Their squad is held for 30 seconds. If they reload the page in that window they
-get it back; after that they respawn fresh next round.
 
 ## Controls
 
@@ -186,11 +93,22 @@ packages/
   client/    PixiJS renderer, input, netcode, UI
 ```
 
-**Host-authoritative over WebSocket.** One player's machine runs the sim and
-serves the static files on one port — architecturally a listen server. A WebRTC
-mesh was rejected: it needs a signalling server anyway (so the middleman isn't
-actually removed) and an 8-player mesh with no authority needs either lockstep
-determinism or trusting clients.
+**Host-authoritative, over two interchangeable transports.** Exactly one peer
+is authoritative and everyone else sends inputs; only the pipe differs.
+
+- **WebRTC (default, static hosting).** A browser tab runs `Room` and guests
+  connect by room code. Signalling uses PeerJS's free public broker, which only
+  introduces two peers — once the DataChannel opens no game traffic touches it.
+- **WebSocket (`npx squad-arena`).** A Node process runs the same `Room` and
+  serves the bundle on one port.
+
+A full peer-to-peer *mesh* was still rejected: with no single authority an
+8-player mesh needs either lockstep determinism or trusting clients. This is
+one authority reachable two ways, which is why `Room` lives in `shared/` and
+neither host contains game logic — they are pure transport, and `Connection` on
+the client cannot tell which one it is talking to. The hosting player reaches
+their own `Room` through a loopback transport, so even the host is just another
+client.
 
 **`shared/` runs headless.** Its tsconfig has no DOM lib and no ambient
 `@types`, so a stray `document.` or `process.` reference is a compile error

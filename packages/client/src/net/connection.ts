@@ -13,6 +13,7 @@
  * perceived gain.
  */
 
+import type { Transport } from './transport.ts';
 import {
   ENTITY_KINDS,
   MATCH,
@@ -72,7 +73,7 @@ type Listener = {
 };
 
 export class Connection {
-  private ws: WebSocket | null = null;
+  private transport: Transport | null = null;
   private buffer: TimedSnapshot[] = [];
   private seq = 0;
   private lastAckSeq = 0;
@@ -109,18 +110,23 @@ export class Connection {
   private byteWindow: { at: number; bytes: number }[] = [];
   private interpDelay = BASE_INTERP_DELAY;
 
-  connect(url: string, name: string, listener: Listener): void {
+  /**
+   * Attach to a transport (WebSocket, WebRTC peer, or in-tab loopback).
+   *
+   * Connection is deliberately transport-blind: prediction, interpolation and
+   * the snapshot buffer behave identically whether the authority is a Node
+   * process across the internet or a Room running in this very tab.
+   */
+  connect(transport: Transport, name: string, listener: Listener): void {
     this.listener = listener;
-    const ws = new WebSocket(url);
-    this.ws = ws;
+    this.transport = transport;
 
-    ws.onopen = () => {
+    transport.onOpen = () => {
       const token = sessionStorage.getItem('sa-token');
       this.send({ t: 'hello', name, ...(token ? { reconnectToken: token } : {}) });
     };
 
-    ws.onmessage = (ev) => {
-      const raw = typeof ev.data === 'string' ? ev.data : '';
+    transport.onMessage = (raw) => {
       if (!raw) return;
       if (this.simulate.lossPct > 0 && Math.random() * 100 < this.simulate.lossPct) return;
 
@@ -133,10 +139,7 @@ export class Connection {
       }
     };
 
-    ws.onclose = () => this.listener.onClose?.();
-    ws.onerror = () => {
-      /* onclose always follows */
-    };
+    transport.onClose = () => this.listener.onClose?.();
   }
 
   private handle(raw: string): void {
@@ -256,9 +259,7 @@ export class Connection {
   // ── sending ───────────────────────────────────────────────────────────────
 
   send(msg: unknown): void {
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify(msg));
-    }
+    this.transport?.send(msg);
   }
 
   sendInput(dirX: number, dirY: number, dt: number, chestChoice?: number): void {
@@ -385,6 +386,7 @@ export class Connection {
   }
 
   close(): void {
-    this.ws?.close();
+    this.transport?.close();
+    this.transport = null;
   }
 }

@@ -21,7 +21,23 @@ function el<K extends keyof HTMLElementTagNameMap>(
 
 // ── join ────────────────────────────────────────────────────────────────────
 
-export function showJoin(onJoin: (name: string) => void): () => void {
+export type StartChoice =
+  | { mode: 'server'; name: string }
+  | { mode: 'host'; name: string }
+  | { mode: 'join'; name: string; code: string };
+
+/**
+ * Opening screen.
+ *
+ * When the page is served by the Node host there is already an authority to
+ * talk to, so the only question is the player's name. On a static deployment
+ * (GitHub Pages) there is no server at all, so somebody has to host from their
+ * browser and the rest join by room code.
+ */
+export function showJoin(
+  hasServer: boolean,
+  onStart: (choice: StartChoice) => void,
+): { close: () => void; setError: (msg: string) => void; setBusy: (msg: string | null) => void } {
   const overlay = el('div', 'overlay');
   const card = el('div', 'card');
 
@@ -43,32 +59,116 @@ export function showJoin(onJoin: (name: string) => void): () => void {
   input.maxLength = 16;
   input.placeholder = 'e.g. Sherman';
   input.value = localStorage.getItem('sa-name') ?? '';
-
-  const row = el('div', 'row mt');
-  const btn = el('button');
-  btn.textContent = 'Join game';
-  row.appendChild(btn);
+  card.append(label, input);
 
   const err = el('div', 'err');
+  const busy = el('div', 'hint');
 
-  const submit = (): void => {
-    const name = input.value.trim() || 'Player';
-    localStorage.setItem('sa-name', name);
-    btn.disabled = true;
-    btn.textContent = 'Connecting…';
-    onJoin(name);
-  };
-  btn.onclick = submit;
-  input.onkeydown = (e) => {
-    if (e.key === 'Enter') submit();
+  const nameOf = (): string => {
+    const n = input.value.trim() || 'Player';
+    localStorage.setItem('sa-name', n);
+    return n;
   };
 
-  card.append(label, input, row, err);
+  if (hasServer) {
+    const row = el('div', 'row mt');
+    const btn = el('button');
+    btn.textContent = 'Join game';
+    btn.onclick = () => onStart({ mode: 'server', name: nameOf() });
+    input.onkeydown = (e) => {
+      if (e.key === 'Enter') btn.click();
+    };
+    row.appendChild(btn);
+    card.append(row, err, busy);
+  } else {
+    const hostRow = el('div', 'row mt');
+    const hostBtn = el('button');
+    hostBtn.textContent = 'Host a game';
+    hostBtn.onclick = () => onStart({ mode: 'host', name: nameOf() });
+    hostRow.appendChild(hostBtn);
+
+    const sep = el('div', 'hint');
+    sep.textContent = 'or join a friend who is hosting';
+
+    const codeLabel = el('label');
+    codeLabel.textContent = 'Room code';
+    codeLabel.htmlFor = 'code';
+    const code = el('input');
+    code.type = 'text';
+    code.id = 'code';
+    code.maxLength = 8;
+    code.placeholder = 'ABC12';
+    code.autocapitalize = 'characters';
+    code.spellcheck = false;
+
+    const joinRow = el('div', 'row mt');
+    const joinBtn = el('button', 'secondary');
+    joinBtn.textContent = 'Join with code';
+    const submitJoin = (): void => {
+      const c = code.value.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+      if (c.length < 4) {
+        err.textContent = 'Enter the room code your friend sent you.';
+        return;
+      }
+      err.textContent = '';
+      onStart({ mode: 'join', name: nameOf(), code: c });
+    };
+    joinBtn.onclick = submitJoin;
+    code.onkeydown = (e) => {
+      if (e.key === 'Enter') submitJoin();
+    };
+    joinRow.appendChild(joinBtn);
+
+    // A ?room= link lets the host share one tap instead of dictating letters.
+    const preset = new URLSearchParams(location.search).get('room');
+    if (preset) code.value = preset.toUpperCase();
+
+    card.append(hostRow, sep, codeLabel, code, joinRow, err, busy);
+  }
+
   overlay.appendChild(card);
   document.body.appendChild(overlay);
   setTimeout(() => input.focus(), 50);
 
-  return () => overlay.remove();
+  return {
+    close: () => overlay.remove(),
+    setError: (msg) => {
+      err.textContent = msg;
+      busy.textContent = '';
+    },
+    setBusy: (msg) => {
+      busy.textContent = msg ?? '';
+      if (msg) err.textContent = '';
+    },
+  };
+}
+
+/** Shown to the host so they can hand the code (or a link) to friends. */
+export function showRoomCode(code: string): { close: () => void } {
+  const wrap = el('div', 'roomcode');
+  const label = el('div', 'roomcode-label');
+  label.textContent = 'Room code';
+  const value = el('div', 'roomcode-value');
+  value.textContent = code;
+
+  const copy = el('button', 'secondary');
+  copy.textContent = 'Copy invite link';
+  const link = `${location.origin}${location.pathname}?room=${code}`;
+  copy.onclick = () => {
+    void navigator.clipboard?.writeText(link).then(
+      () => {
+        copy.textContent = 'Link copied';
+        setTimeout(() => (copy.textContent = 'Copy invite link'), 1600);
+      },
+      () => {
+        copy.textContent = link;
+      },
+    );
+  };
+
+  wrap.append(label, value, copy);
+  document.body.appendChild(wrap);
+  return { close: () => wrap.remove() };
 }
 
 // ── lobby ───────────────────────────────────────────────────────────────────

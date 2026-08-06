@@ -15,7 +15,9 @@ import {
 } from '@squad-arena/shared';
 
 import { Controls } from './input/controls.ts';
+import { BrowserHost } from './net/browserHost.ts';
 import { Connection, type ViewEntity } from './net/connection.ts';
+import { PeerTransport, WebSocketTransport } from './net/transport.ts';
 import { Audio } from './render/audio.ts';
 import { Scene } from './render/scene.ts';
 import {
@@ -28,6 +30,7 @@ import {
   showJoin,
   showLobby,
   showResults,
+  showRoomCode,
   type HudHandle,
   type LobbyHandle,
 } from './ui/screens.ts';
@@ -46,7 +49,6 @@ const audio = new Audio();
 let hud: HudHandle | null = null;
 let lobby: LobbyHandle | null = null;
 let closeResults: (() => void) | null = null;
-let closeJoin: (() => void) | null = null;
 let removeMute: (() => void) | null = null;
 
 let hostId = 0;
@@ -61,56 +63,113 @@ function socketUrl(): string {
   return `${proto}//${location.host}/ws`;
 }
 
-// ── flow ────────────────────────────────────────────────────────────────────
+/**
+ * Is a Node host serving this page?
+ *
+ * On GitHub Pages there is no server at all, so the game has to be hosted from
+ * somebody's browser. Probing /healthz is more reliable than sniffing the
+ * hostname, and it fails fast because a static host answers 404 immediately.
+ */
+async function detectServer(): Promise<boolean> {
+  try {
+    const res = await fetch('healthz', { cache: 'no-store' });
+    if (!res.ok) return false;
+    const body = (await res.json()) as { ok?: boolean };
+    return body.ok === true;
+  } catch {
+    return false;
+  }
+}
 
-closeJoin = showJoin((name) => {
-  // Browsers refuse to start an AudioContext without a gesture; joining is one.
-  audio.unlock();
-  audio.setMuted(localStorage.getItem('sa-muted') === '1');
+let browserHost: BrowserHost | null = null;
+let closeRoomCode: (() => void) | null = null;
 
-  conn.connect(socketUrl(), name, {
-    onWelcome: () => {
-      closeJoin?.();
-      closeJoin = null;
-      if (!lobby) {
-        lobby = showLobby(
-          (r) => conn.setReady(r),
-          () => conn.requestStart(),
-        );
-        lobby.update(lobbyPlayers, hostId, conn.playerId);
-      }
-    },
-    onLobby: (players, host) => {
-      lobbyPlayers = players;
-      hostId = host;
-      lobby?.update(players, host, conn.playerId);
-    },
-    onStart: () => {
-      closeResults?.();
-      closeResults = null;
-      lobby?.close();
-      lobby = null;
-      startMatch();
-    },
-    onMap: (size, tiles) => {
-      // The host sends `start` then `map` back to back, but Pixi init is async,
-      // so the map routinely lands before the renderer exists. Buffer it and
-      // let startMatch apply it once the scene is up.
-      pendingMap = { size, tiles };
-      if (scene.ready) applyPendingMap();
-    },
-    onEnd: (standings) => {
-      running = false;
-      hud?.destroy();
-      hud = null;
-      closeResults = showResults(standings, conn.playerId, conn.playerId === hostId, () => {
-        conn.requestStart();
-      });
-    },
-    onEvents: handleEvents,
-    onClose: () => {
-      lobby?.setError('Lost connection to the host. Reload to try again.');
-    },
+const listeners = {
+  onWelcome: () => {
+    start?.close();
+    start = null;
+    if (!lobby) {
+      lobby = showLobby(
+        (r) => conn.setReady(r),
+        () => conn.requestStart(),
+      );
+      lobby.update(lobbyPlayers, hostId, conn.playerId);
+    }
+  },
+  onLobby: (players: LobbyPlayer[], host: number) => {
+    lobbyPlayers = players;
+    hostId = host;
+    lobby?.update(players, host, conn.playerId);
+  },
+  onStart: () => {
+    closeResults?.();
+    closeResults = null;
+    lobby?.close();
+    lobby = null;
+    void startMatch();
+  },
+  onMap: (size: number, tiles: Uint8Array) => {
+    // The host sends `start` then `map` back to back, but Pixi init is async,
+    // so the map routinely lands before the renderer exists. Buffer it and
+    // let startMatch apply it once the scene is up.
+    pendingMap = { size, tiles };
+    if (scene.ready) applyPendingMap();
+  },
+  onEnd: (standings: { id: number; name: string; gems: number }[]) => {
+    running = false;
+    hud?.destroy();
+    hud = null;
+    closeResults = showResults(standings, conn.playerId, conn.playerId === hostId, () => {
+      conn.requestStart();
+    });
+  },
+  onEvents: handleEvents,
+  onClose: () => {
+    lobby?.setError('Lost connection to the host. Reload to try again.');
+  },
+};
+
+let start: ReturnType<typeof showJoin> | null = null;
+
+void detectServer().then((hasServer) => {
+  start = showJoin(hasServer, (choice) => {
+    // Browsers refuse to start an AudioContext without a gesture; this is one.
+    audio.unlock();
+    audio.setMuted(localStorage.getItem('sa-muted') === '1');
+
+    if (choice.mode === 'server') {
+      conn.connect(new WebSocketTransport(socketUrl()), choice.name, listeners);
+      return;
+    }
+
+    if (choice.mode === 'join') {
+      start?.setBusy('Connecting to the room…');
+      conn.connect(
+        new PeerTransport(choice.code, (msg) => start?.setError(msg)),
+        choice.name,
+        listeners,
+      );
+      return;
+    }
+
+    // Hosting: this tab runs the authoritative Room and every other player
+    // connects to it. We join our own room through a loopback transport, so
+    // from here on the host is just another client.
+    start?.setBusy('Opening a room…');
+    const host = new BrowserHost({
+      onReady: (code) => {
+        closeRoomCode?.();
+        closeRoomCode = showRoomCode(code).close;
+        conn.connect(host.loopback, choice.name, listeners);
+        host.openLocalClient();
+      },
+      onError: (msg) => start?.setError(msg),
+      onPeersChanged: () => {
+        /* the lobby list already reflects this */
+      },
+    });
+    browserHost = host;
+    host.start();
   });
 });
 
@@ -310,3 +369,10 @@ declare global {
   }
 }
 window.saNet = conn.simulate;
+
+// Tear the room down on navigate-away so the signalling broker drops the room
+// code immediately instead of holding it until its own timeout.
+window.addEventListener('pagehide', () => {
+  browserHost?.stop();
+  conn.close();
+});

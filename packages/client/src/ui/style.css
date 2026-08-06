@@ -435,3 +435,40 @@ button.secondary {
   border: 1px solid var(--line);
   border-radius: 999px;
 }
+
+/* Room code panel, shown to whoever is hosting from their browser. */
+.roomcode {
+  position: fixed;
+  top: max(10px, env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 16px;
+  background: rgba(13, 17, 25, 0.9);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.roomcode-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-dim);
+}
+
+.roomcode-value {
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--accent);
+}
+
+.roomcode button {
+  padding: 6px 12px;
+  font-size: 13px;
+}

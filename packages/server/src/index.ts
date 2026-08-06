@@ -12,11 +12,10 @@ import { createServer } from 'node:http';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { MATCH, decode, type ClientMessage } from '@squad-arena/shared';
+import { Room, TICK_DT, decode, type ClientMessage } from '@squad-arena/shared';
 import { WebSocketServer, type WebSocket } from 'ws';
 
 import { lanAddresses, printBanner, publicAddress } from './netinfo.ts';
-import { Room } from './room.ts';
 import { createStaticHandler } from './static.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -36,22 +35,27 @@ const CLIENT_DIST = [
   resolve(__dirname, '../../client/dist'),
 ].find((p) => existsSync(p)) ?? resolve(__dirname, '../../client/dist');
 
-const sockets = new Map<number, WebSocket>();
+/**
+ * Keyed by transport key, not player id: Room sends `welcome` while still
+ * inside `handle()`, so a playerId-keyed map would not be populated yet and the
+ * first message to every joining client would be dropped.
+ */
+const sockets = new Map<string, WebSocket>();
 
 const room = new Room((id, msg) => {
-  const ws = sockets.get(id);
+  const key = room.keyFor(id);
+  if (key === undefined) return;
+  const ws = sockets.get(key);
   if (!ws || ws.readyState !== ws.OPEN) return;
   ws.send(typeof msg === 'string' ? msg : JSON.stringify(msg));
 });
 
 function broadcastLobby(): void {
   const payload = room.lobbyPayload();
-  for (const id of sockets.keys()) sendTo(id, payload);
-}
-
-function sendTo(id: number, msg: unknown): void {
-  const ws = sockets.get(id);
-  if (ws && ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg));
+  const raw = JSON.stringify(payload);
+  for (const ws of sockets.values()) {
+    if (ws.readyState === ws.OPEN) ws.send(raw);
+  }
 }
 
 // ── HTTP ────────────────────────────────────────────────────────────────────
@@ -77,81 +81,44 @@ const server = createServer((req, res) => {
 const wss = new WebSocketServer({ server, path: '/ws' });
 
 wss.on('connection', (ws) => {
-  let playerId: number | null = null;
+  // Every socket gets a stable key; Room owns the key -> player mapping and all
+  // protocol handling, so this file is purely transport.
+  const key = `ws-${nextKey++}`;
+
+  // Register the socket before any message is handled, so the `welcome` that
+  // Room emits from inside handle() has somewhere to go.
+  sockets.set(key, ws);
 
   ws.on('message', (raw) => {
     const msg = decode<ClientMessage>(raw.toString());
     if (!msg || typeof msg.t !== 'string') return;
-
-    switch (msg.t) {
-      case 'hello': {
-        const member = room.join(msg.name, msg.reconnectToken);
-        playerId = member.id;
-        sockets.set(member.id, ws);
-        sendTo(member.id, {
-          t: 'welcome',
-          playerId: member.id,
-          reconnectToken: member.reconnectToken,
-          config: MATCH,
-          roomState: room.state,
-        });
-        // A player joining mid-match needs the map before snapshots make sense.
-        if (room.state === 'playing' && room.world) {
-          sendTo(member.id, {
-            t: 'start',
-            seed: 0,
-            tick0: room.world.tickNumber,
-            playerCount: room.world.players.size,
-            assignments: [...room.world.players.values()].map((p) => ({
-              id: p.id,
-              index: p.index,
-              name: p.name,
-            })),
-          });
-          sendTo(member.id, room.mapPayload());
-        }
-        broadcastLobby();
-        break;
-      }
-
-      case 'ready': {
-        if (playerId === null) return;
-        room.setReady(playerId, msg.ready);
-        broadcastLobby();
-        break;
-      }
-
-      case 'startRequest': {
-        if (playerId === null || playerId !== room.hostId) return;
-        room.start();
-        broadcastLobby();
-        break;
-      }
-
-      case 'input': {
-        if (playerId === null) return;
-        room.setInput(playerId, {
-          seq: msg.seq,
-          dirX: msg.dirX,
-          dirY: msg.dirY,
-          ...(msg.chestChoice !== undefined ? { chestChoice: msg.chestChoice } : {}),
-        });
-        break;
-      }
-    }
+    if (room.handle(key, msg)) broadcastLobby();
   });
 
   ws.on('close', () => {
-    if (playerId === null) return;
-    sockets.delete(playerId);
-    room.markDisconnected(playerId);
-    broadcastLobby();
+    sockets.delete(key);
+    if (room.detach(key)) broadcastLobby();
   });
 
   ws.on('error', () => {
     /* a dropped client is normal; close handles cleanup */
   });
 });
+
+let nextKey = 1;
+
+// ── tick loop ───────────────────────────────────────────────────────────────
+// Room is transport-agnostic and deliberately owns no timer, so the clock lives
+// here. A short interval with an accumulator rather than a 50ms one: setInterval
+// drifts, and the simulation must advance in exact fixed steps.
+
+let lastTick = performance.now();
+setInterval(() => {
+  const now = performance.now();
+  const dt = (now - lastTick) / 1000;
+  lastTick = now;
+  room.advance(dt);
+}, Math.max(1, Math.round((TICK_DT * 1000) / 4)));
 
 // ── boot ────────────────────────────────────────────────────────────────────
 

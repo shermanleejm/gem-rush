@@ -1,25 +1,26 @@
 /**
  * One match instance (brief §2.3).
  *
- * Owns a World, runs the fixed 20 Hz tick loop, and turns world state into
- * per-client snapshots. Everything authoritative lives here; clients only ever
- * send inputs.
+ * Owns a World and turns world state into per-client snapshots. Everything
+ * authoritative lives here; clients only ever send inputs.
+ *
+ * Transport-agnostic and dependency-free on purpose: this runs unchanged in the
+ * Node host over WebSocket *and* in a browser tab acting as host over a WebRTC
+ * DataChannel. That means no Buffer, no NodeJS types, and no timers — the
+ * caller owns the clock and calls `advance(dt)`, because `setInterval` is not
+ * in this package's lib and the two environments schedule differently anyway.
  */
 
-import {
-  ENTITY_KINDS,
-  MATCH,
-  TICK_DT,
-  TICK_RATE,
-  UNIT_TYPES,
-  World,
-  type EntityWire,
-  type InputCommand,
-  type PlayerId,
-  type PlayerWire,
-  type SnapshotMsg,
-  type WorldEvent,
-} from '@squad-arena/shared';
+import { MATCH, TICK_DT, TICK_RATE } from '../config/match.ts';
+import { UNIT_TYPES } from '../config/units.ts';
+import type {
+  ClientMessage,
+  EntityWire,
+  PlayerWire,
+  SnapshotMsg,
+} from '../protocol/messages.ts';
+import { ENTITY_KINDS } from '../sim/entities.ts';
+import { World, type InputCommand, type PlayerId, type WorldEvent } from '../sim/world.ts';
 
 /** Full resync anchor every 100 ticks (5s), per §2.6. */
 const FULL_SNAPSHOT_INTERVAL = 100;
@@ -49,9 +50,7 @@ export class Room {
   hostId: PlayerId | null = null;
   state: 'lobby' | 'playing' | 'ended' = 'lobby';
 
-  private timer: NodeJS.Timeout | null = null;
   private accumulator = 0;
-  private lastTime = 0;
   private nextPlayerId = 1;
   private seed = 0;
 
@@ -67,6 +66,102 @@ export class Room {
 
   constructor(send: Broadcast) {
     this.send = send;
+  }
+
+  /**
+   * Transport key (socket id, peer id, or "local") to player id.
+   *
+   * Owning this here rather than in each host is what stops the Node and
+   * browser hosts drifting apart: they differ only in how bytes move, and both
+   * funnel every client message through `handle()`.
+   */
+  private readonly keyToPlayer = new Map<string, PlayerId>();
+
+  /** Route one decoded client message. Returns true if the lobby changed. */
+  handle(key: string, msg: ClientMessage): boolean {
+    switch (msg.t) {
+      case 'hello': {
+        const member = this.join(msg.name, msg.reconnectToken);
+        this.keyToPlayer.set(key, member.id);
+        this.send(member.id, {
+          t: 'welcome',
+          playerId: member.id,
+          reconnectToken: member.reconnectToken,
+          config: MATCH,
+          roomState: this.state,
+        });
+        // A player arriving mid-match needs the map before snapshots mean
+        // anything, so replay start+map to them immediately.
+        if (this.state === 'playing' && this.world) {
+          this.send(member.id, {
+            t: 'start',
+            seed: 0,
+            tick0: this.world.tickNumber,
+            playerCount: this.world.players.size,
+            assignments: [...this.world.players.values()].map((p) => ({
+              id: p.id,
+              index: p.index,
+              name: p.name,
+            })),
+          });
+          this.send(member.id, this.mapPayload());
+        }
+        return true;
+      }
+
+      case 'ready': {
+        const id = this.keyToPlayer.get(key);
+        if (id === undefined) return false;
+        this.setReady(id, msg.ready);
+        return true;
+      }
+
+      case 'startRequest': {
+        const id = this.keyToPlayer.get(key);
+        // Only the host may start (§2.6).
+        if (id === undefined || id !== this.hostId) return false;
+        this.start();
+        return true;
+      }
+
+      case 'input': {
+        const id = this.keyToPlayer.get(key);
+        if (id === undefined) return false;
+        this.setInput(id, {
+          seq: msg.seq,
+          dirX: msg.dirX,
+          dirY: msg.dirY,
+          ...(msg.chestChoice !== undefined ? { chestChoice: msg.chestChoice } : {}),
+        });
+        return false;
+      }
+    }
+  }
+
+  /** A transport dropped. Returns true if the lobby changed. */
+  detach(key: string): boolean {
+    const id = this.keyToPlayer.get(key);
+    if (id === undefined) return false;
+    this.keyToPlayer.delete(key);
+    this.markDisconnected(id);
+    return true;
+  }
+
+  playerIdFor(key: string): PlayerId | undefined {
+    return this.keyToPlayer.get(key);
+  }
+
+  /**
+   * Transport key for a player, or undefined if they have none.
+   *
+   * Hosts must resolve their socket through this rather than keeping their own
+   * playerId map: `handle()` sends `welcome` *during* the call, before it has
+   * returned an id for the caller to record, so a host-side map is always one
+   * message behind and silently drops the first one.
+   */
+  keyFor(playerId: PlayerId): string | undefined {
+    for (const [key, id] of this.keyToPlayer) if (id === playerId) return key;
+    return undefined;
   }
 
   // ── membership ────────────────────────────────────────────────────────────
@@ -179,7 +274,6 @@ export class Room {
       this.send(m.id, this.mapPayload());
     }
 
-    this.startLoop();
   }
 
   mapPayload() {
@@ -187,14 +281,13 @@ export class Room {
     return {
       t: 'map' as const,
       size: this.world.map.size,
-      tiles: Buffer.from(this.world.map.tiles).toString('base64'),
+      tiles: toBase64(this.world.map.tiles),
       homePads: this.world.map.homePads,
     };
   }
 
   /** Reset to lobby for a rematch without restarting the host process (§M6). */
   reset(): void {
-    this.stopLoop();
     this.world = null;
     this.state = 'lobby';
     for (const m of this.members.values()) {
@@ -204,29 +297,18 @@ export class Room {
     }
   }
 
-  private startLoop(): void {
-    this.stopLoop();
-    this.lastTime = performance.now();
-    this.accumulator = 0;
-    // A 5ms timer with an accumulator rather than a 50ms interval: setInterval
-    // drifts, and the sim must advance in exact fixed steps.
-    this.timer = setInterval(() => this.pump(), 5);
-  }
-
-  private stopLoop(): void {
-    if (this.timer) clearInterval(this.timer);
-    this.timer = null;
-  }
-
-  private pump(): void {
-    const now = performance.now();
-    let frame = (now - this.lastTime) / 1000;
-    this.lastTime = now;
-    // Clamp so a stalled host (laptop lid, GC pause) doesn't try to catch up
-    // by running hundreds of ticks in one burst.
-    if (frame > 0.25) frame = 0.25;
-    this.accumulator += frame;
-
+  /**
+   * Advance the match by `dtSeconds` of wall time, running whole fixed ticks.
+   *
+   * The caller drives this from whatever scheduler it has (setInterval in Node,
+   * requestAnimationFrame or a worker timer in a browser). Elapsed time is
+   * clamped so a stalled host — a closed laptop lid, a GC pause, a backgrounded
+   * tab — resumes instead of trying to catch up with a burst of hundreds of
+   * ticks all at once.
+   */
+  advance(dtSeconds: number): void {
+    if (this.state !== 'playing') return;
+    this.accumulator += Math.min(dtSeconds, 0.25);
     while (this.accumulator >= TICK_DT) {
       this.accumulator -= TICK_DT;
       this.step();
@@ -244,9 +326,9 @@ export class Room {
       if (m.connected) inputs.set(m.id, m.input);
     }
 
-    const t0 = performance.now();
+    const t0 = Date.now();
     world.tick(inputs);
-    this.stats.tickMs = performance.now() - t0;
+    this.stats.tickMs = Date.now() - t0;
     this.stats.entities = world.store.liveCount;
 
     // Chest choices are one-shot: clear after the tick that consumed them so
@@ -261,7 +343,6 @@ export class Room {
 
     if (world.phase === 'ended') {
       this.state = 'ended';
-      this.stopLoop();
       const standings = world.standings();
       for (const m of this.members.values()) this.send(m.id, { t: 'end', standings });
     }
@@ -368,6 +449,26 @@ export class Room {
     }
     this.stats.snapshotBytes = measured;
   }
+}
+
+/**
+ * Base64 without Buffer or btoa.
+ * Node has Buffer and browsers have btoa, but this package must not assume
+ * either, and the tile array is sent once per match so the cost is irrelevant.
+ */
+const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+
+export function toBase64(bytes: Uint8Array): string {
+  let out = '';
+  for (let i = 0; i < bytes.length; i += 3) {
+    const a = bytes[i]!;
+    const b = i + 1 < bytes.length ? bytes[i + 1]! : 0;
+    const c = i + 2 < bytes.length ? bytes[i + 2]! : 0;
+    out += B64[a >> 2]! + B64[((a & 3) << 4) | (b >> 4)]!;
+    out += i + 1 < bytes.length ? B64[((b & 15) << 2) | (c >> 6)]! : '=';
+    out += i + 2 < bytes.length ? B64[c & 63]! : '=';
+  }
+  return out;
 }
 
 /** Cheap field-wise compare; the delta only needs to know "did anything move". */

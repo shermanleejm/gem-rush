@@ -17,3 +17,4 @@ export * from './sim/world.ts';
 export * from './sim/bots.ts';
 
 export * from './protocol/messages.ts';
+export * from './net/room.ts';
