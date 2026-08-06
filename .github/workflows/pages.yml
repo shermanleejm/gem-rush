@@ -59,3 +59,9 @@ jobs:
     steps:
       - id: deployment
         uses: actions/deploy-pages@v4
+        with:
+          # The default 10 minutes is not enough for the first deploys after a
+          # Pages site is created: deployments sit in `deployment_queued` while
+          # the backend settles, the action aborts, and the artifact is built
+          # but never published.
+          timeout: 1200000
