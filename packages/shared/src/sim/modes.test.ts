@@ -154,7 +154,8 @@ describe('the opening draft', () => {
   });
 
   it('respawns the character the player drafted, not a default', () => {
-    const w = new World(23, 1);
+    // A mode that rebuilds rather than eliminates, so there is a respawn to check.
+    const w = new World(23, 2, 'duoGemHunt');
     const p = w.addPlayer(1, 'Solo');
     w.beginDraft();
     w.tick(new Map([[1, { seq: 1, dirX: 0, dirY: 0, draftChoice: 0 }]]));
@@ -450,16 +451,26 @@ describe('combat mechanics from the new roster', () => {
   });
 
   it('supplier discounts make chests cheaper but never free', () => {
-    const w = new World(44, 1);
-    const p = w.addPlayer(1, 'Pirate');
-    w.start();
+    // Compared against an equally large squad of non-discounting units, because
+    // price now scales with squad size — measuring a six-unit discount squad
+    // against an empty one would just measure the size increase.
+    const withDiscount = new World(44, 1);
+    const a = withDiscount.addPlayer(1, 'Pirate');
+    withDiscount.start();
 
-    const full = w.chestPriceFor(p);
-    for (let i = 0; i < 6; i++) spawnUnit(w.store, p.index, 'buccaneer', 2, 32 + i * 0.3, 32);
-    w.tick(idle([1]));
+    const plain = new World(44, 1);
+    const b = plain.addPlayer(1, 'Plain');
+    plain.start();
 
-    const discounted = w.chestPriceFor(p);
-    expect(discounted).toBeLessThan(full);
+    for (let i = 0; i < 6; i++) {
+      spawnUnit(withDiscount.store, a.index, 'buccaneer', 2, 32 + i * 0.3, 32);
+      spawnUnit(plain.store, b.index, 'pilferer', 2, 32 + i * 0.3, 32);
+    }
+    withDiscount.tick(idle([1]));
+    plain.tick(idle([1]));
+
+    const discounted = withDiscount.chestPriceFor(a);
+    expect(discounted).toBeLessThan(plain.chestPriceFor(b));
     expect(discounted).toBeGreaterThanOrEqual(1);
   });
 

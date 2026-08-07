@@ -78,12 +78,19 @@ export interface PlayerState {
   /** Spending money. Buys chests; never counts toward score. */
   coins: number;
   chestsOpened: number;
-  nextChestPrice: number;
   respawnIn: number;
   connected: boolean;
   /** Radians; drives formation orientation. */
   facing: number;
   lastAckSeq: number;
+  /**
+   * Live mirror of `World.chestPriceFor`, refreshed every tick.
+   *
+   * Derived, never assigned by anyone else: the price now moves with squad size
+   * rather than accumulating on purchase, and the bots and the wire both want
+   * to read it without holding a `World`.
+   */
+  nextChestPrice: number;
   /** Pending chest offer awaiting a choice, if any. */
   offer: UnitType[] | null;
   offerChestId: EntityId;
@@ -166,6 +173,8 @@ export class World {
   draftRemaining = 0;
   /** Current ring radius in world units; Infinity when no ring is closing. */
   ringRadius = Infinity;
+  /** How many sides the match started with; fixed at `start()`. */
+  private initialAlliances = 0;
 
   camps: CreepCamp[] = [];
   chestSpots: { x: number; y: number }[] = [];
@@ -300,10 +309,20 @@ export class World {
     return n;
   }
 
-  /** What this player's next chest actually costs, after Supplier discounts. */
+  /**
+   * What this player's next chest costs.
+   *
+   * Priced off **squad size**, not off how many chests they have bought. Those
+   * came apart the moment units started dying: a player who bought six and lost
+   * five was still being charged as though they had six, so recovering from a
+   * bad fight was priced like extending a winning streak. Pricing the slot you
+   * are about to fill keeps the curve honest in both directions — rebuilding is
+   * cheap, and running away with a huge squad gets steadily more expensive.
+   */
   chestPriceFor(player: PlayerState): number {
+    const size = this.squadSize(player.index);
     const discount = this.aurasOf(player.id).chestDiscount;
-    return Math.max(1, Math.round(player.nextChestPrice - discount));
+    return Math.max(1, Math.round(MATCH.chestBasePrice + size * MATCH.chestPriceStep - discount));
   }
 
   leaderOf(player: PlayerState): Entity | undefined {
@@ -357,6 +376,7 @@ export class World {
     this.phase = 'playing';
     this.elapsed = 0;
     this.tickNumber = 0;
+    this.initialAlliances = new Set([...this.players.values()].map((p) => p.alliance)).size;
 
     for (const player of this.players.values()) {
       if (!player.starterType) this.chooseStarter(player, 0);
@@ -538,11 +558,14 @@ export class World {
 
     for (const e of this.store.items) {
       if (!e.alive || e.hp <= 0) continue;
-      if (e.kind !== 'unit' && e.kind !== 'creep') continue;
+      // Rival units only. Creeps deliberately do not pull anyone out of
+      // formation: they sit in camps and never roam, so a unit that walks out
+      // to meet one walks into all four of its campmates. With a one-unit
+      // opening squad that was a death sentence within seconds of leaving
+      // spawn — camps have to be something the player chooses to attack, not
+      // something their squad wanders into on its behalf.
+      if (e.kind !== 'unit') continue;
       if (e.alliance === unit.alliance) continue;
-      // Creeps are scenery that fights back; they should not drag a squad off
-      // its route the way an enemy player does.
-      if (e.kind === 'creep' && distanceSq(slotX, slotY, e.x, e.y) > leashSq * 0.4) continue;
       if (distanceSq(slotX, slotY, e.x, e.y) > leashSq) continue;
 
       const dSq = distanceSq(unit.x, unit.y, e.x, e.y);
@@ -565,6 +588,9 @@ export class World {
       const auras = squadAuras(squad);
       this.auras.set(player.id, auras);
       applyHpAura(squad, auras.hpMultiplier);
+      // Refresh the mirrored price now that both squad size and the Supplier
+      // discount for this tick are known.
+      player.nextChestPrice = this.chestPriceFor(player);
     }
   }
 
@@ -697,6 +723,18 @@ export class World {
     const tiles = this.map.tiles;
     const r = e.radius;
 
+    // Squad separation can shove a unit into geometry, and once its centre is
+    // inside rock every axis test below fails and it is stuck there for the
+    // rest of the match. Eject first, then move.
+    if (this.circleHitsWall(tiles, size, e.x, e.y, r)) {
+      this.ejectFromWall(e);
+    }
+
+    const startX = e.x;
+    const startY = e.y;
+
+    // Axis-separated so a diagonal into a wall slides along it rather than
+    // stopping dead.
     const nextX = e.x + e.vx * dt;
     if (!this.circleHitsWall(tiles, size, nextX, e.y, r)) {
       e.x = nextX;
@@ -706,8 +744,58 @@ export class World {
       e.y = nextY;
     }
 
+    // Both axes blocked but the unit still wants to move: it is jammed in a
+    // corner facing its target, which axis sliding alone can never resolve —
+    // the unit just presses into the rock forever. Try stepping sideways
+    // instead, picking whichever perpendicular gets it closer to where it was
+    // heading. That is enough to walk it around an obstacle without paying for
+    // real pathfinding.
+    const stuck = e.x === startX && e.y === startY;
+    if (stuck && (e.vx !== 0 || e.vy !== 0)) {
+      const speed = Math.hypot(e.vx, e.vy);
+      const perpX = -e.vy / speed;
+      const perpY = e.vx / speed;
+      const step = speed * dt;
+
+      let bestX = e.x;
+      let bestY = e.y;
+      let bestScore = -Infinity;
+      for (const sign of [1, -1]) {
+        const tx = e.x + perpX * sign * step;
+        const ty = e.y + perpY * sign * step;
+        if (this.circleHitsWall(tiles, size, tx, ty, r)) continue;
+        // Prefer the side that makes progress along the original heading.
+        const score = (tx - startX) * e.vx + (ty - startY) * e.vy;
+        if (score > bestScore) {
+          bestScore = score;
+          bestX = tx;
+          bestY = ty;
+        }
+      }
+      e.x = bestX;
+      e.y = bestY;
+    }
+
     e.x = clamp(e.x, r, size - r);
     e.y = clamp(e.y, r, size - r);
+  }
+
+  /** Push an entity whose centre ended up inside rock out to the nearest gap. */
+  private ejectFromWall(e: Entity): void {
+    const size = this.map.size;
+    const tiles = this.map.tiles;
+    const r = e.radius;
+    for (let ring = 1; ring <= 4; ring++) {
+      for (let i = 0; i < 8; i++) {
+        const a = (i / 8) * Math.PI * 2;
+        const tx = e.x + Math.cos(a) * ring * 0.6;
+        const ty = e.y + Math.sin(a) * ring * 0.6;
+        if (this.circleHitsWall(tiles, size, tx, ty, r)) continue;
+        e.x = tx;
+        e.y = ty;
+        return;
+      }
+    }
   }
 
   private circleHitsWall(
@@ -1105,7 +1193,6 @@ export class World {
     // is a self-inflicted setback and the whole economy reads as a trap.
     player.coins -= price;
     player.chestsOpened += 1;
-    player.nextChestPrice += MATCH.chestPriceStep;
 
     const leader = this.leaderOf(player);
     const sx = leader ? leader.x : chest.x;
@@ -1174,6 +1261,9 @@ export class World {
 
       loser.wiped = true;
       loser.respawnIn = MATCH.respawnSeconds;
+      // Elimination does not care *who* finished the squad off. Creeps, the
+      // closing ring and a rival all leave you with no units, and only the last
+      // of those used to count — so you could be wiped by the map and carry on.
       if (this.mode.elimination) {
         loser.eliminated = true;
         this.events.push({ t: 'eliminated', player: loser.id });
@@ -1296,21 +1386,22 @@ export class World {
     // Every mode has a hard ceiling, timed or not, so nothing can run forever.
     if (remaining <= 0) return true;
 
-    switch (this.mode.winBy) {
-      case 'survival': {
-        // One side left standing. Counting *alliances* rather than players is
-        // what makes this correct for duos: a surviving pair is one winner,
-        // not a draw between two.
-        const sides = new Set<number>();
-        for (const p of this.players.values()) if (!p.eliminated) sides.add(p.alliance);
-        return sides.size <= 1;
-      }
-      case 'collect':
-        // Co-op ends the moment the last collectible is home.
-        return this.store.count('hatchling') === 0;
-      default:
-        return false;
+    // One side left standing ends any mode that can eliminate at all. Without
+    // this a Gem Hunt where everyone has been busted would keep running, and
+    // the last survivor would farm an empty map until the clock expired.
+    //
+    // Guarded on there having been more than one side to begin with, or a solo
+    // match satisfies "one side remains" on its very first tick and ends
+    // instantly.
+    if (this.mode.elimination && this.initialAlliances > 1) {
+      const sides = new Set<number>();
+      for (const p of this.players.values()) if (!p.eliminated) sides.add(p.alliance);
+      if (sides.size <= 1) return true;
     }
+
+    // Co-op ends the moment the last collectible is home.
+    if (this.mode.winBy === 'collect') return this.store.count('hatchling') === 0;
+    return false;
   }
 
   /** Seconds left in the match, floored at zero. */

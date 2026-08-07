@@ -441,9 +441,14 @@ function frame(now: number): void {
     }
     minimap.draw(minimapDots, mapSize);
 
-    // Tell the player why their squad vanished — there was no feedback at all.
-    if (me?.wiped) {
-      banner.show('Squad wiped', 'Respawning at your home pad…');
+    // Tell the player why their squad vanished. The two outcomes are very
+    // different and the banner used to promise a respawn in both — in Gem Hunt
+    // a wipe now ends your run, and saying "respawning" while nothing respawned
+    // is worse than saying nothing.
+    if (me?.out) {
+      banner.show('Busted', `You finished with ${me.g} gems.`);
+    } else if (me?.wiped) {
+      banner.show('Squad wiped', 'Rebuilding at your home pad…');
     } else {
       banner.hide();
     }

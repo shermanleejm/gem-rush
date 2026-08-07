@@ -89,7 +89,11 @@ export const GAME_MODES: Record<GameModeId, GameMode> = {
     label: 'Gem Hunt',
     tagline: 'Most gems in four minutes wins',
     objective:
-      'Smash props, clear camps and bust rival squads. Whoever is holding the most gems when the clock stops wins.',
+      'Smash props, clear camps and bust rival squads. Lose your whole squad and you are out with whatever you were holding. Most gems when the clock stops wins.',
+    // Losing your squad ends your run. Respawning made a wipe cost five idle
+    // seconds and two free units, so being busted was an inconvenience rather
+    // than the thing the whole PvP layer is for.
+    elimination: true,
   },
 
   duoGemHunt: {
@@ -100,6 +104,10 @@ export const GAME_MODES: Record<GameModeId, GameMode> = {
     objective:
       'Same hunt, but you are in a pair. Your gems and your partner’s go into one pot, and you are only out when both of you are.',
     teamSize: 2,
+    // Deliberately *not* elimination: a busted partner rebuilds and rejoins,
+    // and the pair is only finished when both are down. That is what makes
+    // duos a different game rather than solo with a shared scoreboard.
+    elimination: false,
   },
 
   showdown: {

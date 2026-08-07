@@ -19,7 +19,16 @@ import type { Rng } from '../math/rng.ts';
 import { TEAM_NEUTRAL, type Entity, type EntityStore } from './entities.ts';
 import { findOpenTile, isWallAt } from './mapgen.ts';
 
-export const PROP_HP = 40;
+/**
+ * Crates are deliberately flimsy.
+ *
+ * The leader chips at 7 damage every 0.6s, so a 40 HP crate took three and a
+ * half seconds of standing still — which a moving player never spends, and a
+ * measured four-minute match broke exactly one crate across four players. At 18
+ * a passing leader gets one in about 1.5s and a single unit takes two swings,
+ * which is what makes the map feel smashable.
+ */
+export const PROP_HP = 18;
 export const NODE_HP = 120;
 export const CREEP_HP = 70;
 export const CREEP_DAMAGE = 8;
@@ -31,22 +40,50 @@ export const CREEP_INTERVAL = 1.2;
  * Rejection sampling with a zone-weighted accept test: simple, seeded, and it
  * degrades to "anywhere open" rather than looping forever on a dense map.
  */
+/**
+ * Is every tile within `footprint` of this point free of rock?
+ *
+ * Placement used to test the single tile under an object's centre, which is
+ * fine for a point but wrong for anything that draws bigger than one tile — a
+ * tree renders about 1.5 tiles across, so one placed beside a wall came out
+ * visibly buried in it. Objects are checked against the space they actually
+ * occupy instead.
+ */
+function hasClearance(tiles: Uint8Array, x: number, y: number, footprint: number, size: number): boolean {
+  const steps = Math.max(1, Math.ceil(footprint));
+  for (let oy = -steps; oy <= steps; oy++) {
+    for (let ox = -steps; ox <= steps; ox++) {
+      const px = x + (ox / steps) * footprint;
+      const py = y + (oy / steps) * footprint;
+      if (isWallAt(tiles, px, py, size)) return false;
+    }
+  }
+  return true;
+}
+
 function centreBiasedSpot(
   tiles: Uint8Array,
   rng: Rng,
   size: number,
   clearRadius: number,
   store: EntityStore,
+  footprint = 0.6,
 ): { x: number; y: number } {
-  for (let attempt = 0; attempt < 120; attempt++) {
+  for (let attempt = 0; attempt < 160; attempt++) {
     const spot = findOpenTile(tiles, rng, size, 40);
     const zone = zoneAt(spot.x, spot.y);
     // Zone 0 always accepted; each ring out is progressively less likely.
     const acceptance = [1.0, 0.7, 0.45, 0.3][zone] ?? 0.3;
     if (!rng.chance(acceptance)) continue;
-    if (isWallAt(tiles, spot.x, spot.y, size)) continue;
+    if (!hasClearance(tiles, spot.x, spot.y, footprint, size)) continue;
     if (isOccupied(store, spot.x, spot.y, clearRadius)) continue;
     return spot;
+  }
+  // Last resort: relax the zone bias but never the clearance, because a buried
+  // object is worse than a badly-placed one.
+  for (let attempt = 0; attempt < 200; attempt++) {
+    const spot = findOpenTile(tiles, rng, size, 40);
+    if (hasClearance(tiles, spot.x, spot.y, footprint, size)) return spot;
   }
   return findOpenTile(tiles, rng, size);
 }
@@ -269,18 +306,18 @@ export function populateArena(
   const size = MAP.size;
 
   for (let i = 0; i < MAP.props; i++) {
-    const spot = centreBiasedSpot(tiles, rng, size, 0.9, store);
+    const spot = centreBiasedSpot(tiles, rng, size, 0.9, store, 0.6);
     spawnProp(store, spot.x, spot.y);
   }
 
   for (let i = 0; i < MAP.resourceNodes; i++) {
-    const spot = centreBiasedSpot(tiles, rng, size, 1.4, store);
+    const spot = centreBiasedSpot(tiles, rng, size, 1.4, store, 0.85);
     spawnNode(store, spot.x, spot.y);
   }
 
   const camps: CreepCamp[] = [];
   for (let c = 0; c < MAP.creepCamps; c++) {
-    const spot = centreBiasedSpot(tiles, rng, size, 3.0, store);
+    const spot = centreBiasedSpot(tiles, rng, size, 3.0, store, 1.4);
     const strength = creepStrengthAt(spot.x, spot.y);
     camps.push({
       id: c,
@@ -300,17 +337,17 @@ export function populateArena(
   }
 
   for (let i = 0; i < MAP.trees; i++) {
-    const spot = centreBiasedSpot(tiles, rng, size, 1.2, store);
+    const spot = centreBiasedSpot(tiles, rng, size, 1.2, store, 1.1);
     spawnFarmable(store, 'tree', spot.x, spot.y);
   }
   for (let i = 0; i < MAP.fields; i++) {
-    const spot = centreBiasedSpot(tiles, rng, size, 1.2, store);
+    const spot = centreBiasedSpot(tiles, rng, size, 1.2, store, 0.8);
     spawnFarmable(store, 'field', spot.x, spot.y);
   }
 
   const chestSpots: { x: number; y: number }[] = [];
   for (let i = 0; i < MAP.chestSpawns; i++) {
-    const spot = centreBiasedSpot(tiles, rng, size, 2.0, store);
+    const spot = centreBiasedSpot(tiles, rng, size, 2.0, store, 0.85);
     chestSpots.push(spot);
     spawnChest(store, spot.x, spot.y);
   }

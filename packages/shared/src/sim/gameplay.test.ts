@@ -50,7 +50,6 @@ describe('the core loop (§1.3)', () => {
     player.gems = 100;
     const coinsBefore = player.coins;
     const gemsBefore = player.gems;
-    const price = player.nextChestPrice;
 
     // Park the leader on a chest and accept the first offer.
     const chest = world.store.ofKind('chest')[0]!;
@@ -65,14 +64,18 @@ describe('the core loop (§1.3)', () => {
     expect(offered, 'standing on a chest with enough gems should produce an offer').toBe(true);
 
     const squadBefore = world.squadOf(player.index).length;
+    // Read the price on the tick it is charged: it is derived from squad size
+    // now, so a value captured earlier would be stale the moment a unit spawns.
+    const price = world.chestPriceFor(player);
     world.tick(new Map([[1, { seq: 2, dirX: 0, dirY: 0, chestChoice: 0 }]]));
 
     expect(player.coins).toBe(coinsBefore - price);
     // The whole point of splitting the currencies: buying must not touch score.
     expect(player.gems).toBe(gemsBefore);
     expect(world.squadOf(player.index).length).toBe(squadBefore + 1);
-    // Escalating price is what stops chests being an auto-buy (§4).
-    expect(player.nextChestPrice).toBe(price + MATCH.chestPriceStep);
+    // Escalating price is what stops chests being an auto-buy (§4) — and it now
+    // escalates with the squad you are building, not with your purchase count.
+    expect(world.chestPriceFor(player)).toBe(price + MATCH.chestPriceStep);
   });
 
   it('composition matters: Guard + Marksman beats an equal count of Strikers (§M4)', () => {
@@ -126,7 +129,11 @@ describe('the core loop (§1.3)', () => {
   });
 
   it('a full match runs to completion and produces a winner', () => {
-    const world = new World(31337, 4);
+    // Duos, because this test is about the economy closing over four minutes
+    // and Gem Hunt now eliminates on a wipe — bots that drive straight into the
+    // toughest camp with one unit would be out before they earned anything, and
+    // the test would be measuring that rather than the loop.
+    const world = new World(31337, 4, 'duoGemHunt');
     for (let i = 0; i < 4; i++) world.addPlayer(i + 1, `P${i + 1}`);
     world.start();
 
@@ -162,15 +169,20 @@ describe('the core loop (§1.3)', () => {
     expect(world.phase).toBe('ended');
     const standings = world.standings();
     expect(standings).toHaveLength(4);
-    // Sorted descending, and someone actually earned something over 4 minutes.
+    // Ranked on `score`, which is what the mode actually counts — in duos that
+    // is the pair's pooled total, so asserting on an individual's gems would
+    // fail whenever the top pair's earner happens to be listed second.
     for (let i = 1; i < standings.length; i++) {
-      expect(standings[i - 1]!.gems).toBeGreaterThanOrEqual(standings[i]!.gems);
+      expect(standings[i - 1]!.score).toBeGreaterThanOrEqual(standings[i]!.score);
     }
-    expect(standings[0]!.gems).toBeGreaterThan(0);
+    expect(standings[0]!.score).toBeGreaterThan(0);
+    // And the loop really closed: gems were banked by somebody.
+    expect(standings.reduce((n, r) => n + r.gems, 0)).toBeGreaterThan(0);
   });
 
   it('a wiped squad respawns at its pad with free units (§1.4)', () => {
-    const world = new World(555, 1);
+    // Duos keep the rebuild rule; solo Gem Hunt eliminates instead.
+    const world = new World(555, 2, 'duoGemHunt');
     const player = world.addPlayer(1, 'Wiped');
     world.start();
 
@@ -198,13 +210,28 @@ describe('the core loop (§1.3)', () => {
     expect(world.phase).toBe('lastCall');
 
     const leader = world.leaderOf(player)!;
+
+    // Clear the arena's own breakables first. Leaders now smash crates they
+    // walk into, so an untouched map feeds a steady trickle of ambient gems and
+    // the first one banked is whichever crate happened to be underfoot — not
+    // the one this test is measuring.
+    for (const e of world.store.items) {
+      if (e.alive && (e.kind === 'prop' || e.kind === 'node' || e.kind === 'creep')) {
+        world.store.despawn(e);
+      }
+    }
+
     const prop = spawnProp(world.store, leader.x + 0.9, leader.y);
     const normalValue = prop.value;
 
+    // Sum the whole drop rather than stopping at the first pickup: a payout is
+    // scattered across several gems, and the smallest of them can be worth less
+    // than the base on its own.
     let banked = 0;
-    for (let i = 0; i < 400 && banked === 0; i++) {
+    for (let i = 0; i < 400; i++) {
       world.tick(input(0, 0));
       for (const ev of world.events) if (ev.t === 'gem') banked += ev.value;
+      if (banked > 0 && !world.store.get(prop.id) && world.store.count('gem') === 0) break;
     }
     // Zone multiplier also applies, so assert strictly greater than the base
     // rather than an exact doubling.
