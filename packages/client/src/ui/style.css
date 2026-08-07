@@ -644,10 +644,12 @@ button.secondary {
 
 /* ── minimap ──────────────────────────────────────────────────────────────── */
 
+/* Sits above the dash button, not on top of it. Both want the bottom-right
+   corner and the dash button is the one you have to be able to hit. */
 .minimap {
   position: fixed;
   right: max(10px, env(safe-area-inset-right));
-  bottom: max(10px, env(safe-area-inset-bottom));
+  bottom: calc(max(20px, env(safe-area-inset-bottom)) + 92px);
   width: 132px;
   height: 132px;
   border-radius: 10px;

@@ -307,6 +307,15 @@ export class Room {
     }
     // Opens the character draft; `World.start()` runs when everyone has picked.
     this.world.beginDraft();
+
+    // Bots choose immediately. The draft ends as soon as *everyone* has picked,
+    // and a bot never sends an input, so leaving them undecided meant every
+    // match sat through the full fifteen-second timeout before starting — with
+    // seven bots in the lobby that is every match, always.
+    for (const bot of this.bots) {
+      const p = this.world.players.get(bot.playerId);
+      if (p) this.world.chooseStarter(p, bot.choiceBias % MATCH.draftOfferCount);
+    }
     this.state = 'playing';
 
     const assignments = [...this.world.players.values()].map((p) => ({
