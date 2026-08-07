@@ -256,21 +256,21 @@ function handleEvents(events: WorldEvent[]): void {
         }
         break;
       case 'chestOpen':
-        scene.spawnBurst(ev.x, ev.y, 0xffc857, 10);
+        // A dud still pops, but grey and small — you should see that something
+        // happened and immediately understand it was nothing.
+        scene.spawnBurst(ev.x, ev.y, ev.dud ? 0x8e9bb0 : 0xffc857, ev.dud ? 4 : 10);
         if (ev.player === conn.playerId) audio.play('chest');
+        break;
+      case 'meteor':
+        scene.spawnBurst(ev.x, ev.y, 0xffa552, 18);
+        audio.play('phase');
         break;
       case 'squadFight':
         scene.spawnBurst(ev.x, ev.y, 0xff6b6b, 16);
         audio.play(ev.loser === conn.playerId ? 'wipe' : 'death');
         break;
-      case 'respawn':
-        break;
       case 'summon':
         scene.spawnBurst(ev.x, ev.y, 0x9d8cff, 8);
-        break;
-      case 'rescue':
-        scene.spawnBurst(ev.x, ev.y, 0xffe27a, 12);
-        if (ev.player === conn.playerId) audio.play('pickup');
         break;
       case 'eliminated':
         if (ev.player === conn.playerId) audio.play('wipe');
@@ -298,7 +298,7 @@ function handleEvents(events: WorldEvent[]): void {
           draft?.close();
           draft = null;
           closeModeCard?.();
-          closeModeCard = showModeCard(conn.mode);
+          closeModeCard = showModeCard(conn.mode, conn.battleMod);
         }
         break;
     }
@@ -392,21 +392,11 @@ function frame(now: number): void {
         }
       }
 
-      // The scoreboard has to count whatever the mode counts. Showing gems in
-      // Hatchling Run would rank players by an irrelevant number, and in duos
-      // the pair shares one total, so partners must show the same figure.
-      const scoreOf = (p: (typeof conn.players)[number]): number => {
-        if (mode.winBy === 'collect') return p.r;
-        if (mode.teamSize > 1) {
-          return conn.players.filter((q) => q.a === p.a).reduce((n, q) => n + q.g, 0);
-        }
-        return p.g;
-      };
       const rows = conn.players
         .map((p) => ({
           id: p.id,
           name: conn.names.get(p.id) ?? lobbyPlayers.find((l) => l.id === p.id)?.name ?? `P${p.id}`,
-          gems: scoreOf(p),
+          gems: p.g,
           out: p.out,
         }))
         .sort((a, b) => Number(a.out) - Number(b.out) || b.gems - a.gems);
@@ -447,8 +437,6 @@ function frame(now: number): void {
     // is worse than saying nothing.
     if (me?.out) {
       banner.show('Busted', `You finished with ${me.g} gems.`);
-    } else if (me?.wiped) {
-      banner.show('Squad wiped', 'Rebuilding at your home pad…');
     } else {
       banner.hide();
     }

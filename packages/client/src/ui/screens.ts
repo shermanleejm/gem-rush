@@ -7,7 +7,10 @@
  */
 
 import {
+  BATTLE_MODS,
+  DEFAULT_BATTLE_MOD,
   GAME_MODES,
+  type BattleModId,
   UNIT_CLASS_LABELS,
   UNIT_DEFS,
   type GameModeId,
@@ -100,8 +103,13 @@ export function showDraft(
 // ── mode card ───────────────────────────────────────────────────────────────
 
 /** Announce which mode was drawn, since it changes every match. */
-export function showModeCard(mode: GameModeId, holdSeconds = 4): () => void {
+export function showModeCard(
+  mode: GameModeId,
+  battleMod: BattleModId = DEFAULT_BATTLE_MOD,
+  holdSeconds = 5,
+): () => void {
   const def = GAME_MODES[mode];
+  const twist = BATTLE_MODS[battleMod];
   const root = el('div', 'mode-card');
   const label = el('div', 'mode-label');
   label.textContent = def.label;
@@ -110,6 +118,16 @@ export function showModeCard(mode: GameModeId, holdSeconds = 4): () => void {
   const objective = el('div', 'mode-objective');
   objective.textContent = def.objective;
   root.append(label, tagline, objective);
+
+  // The twist is the thing that differs match to match, so it gets its own
+  // block rather than being appended to the objective text.
+  if (battleMod !== 'none') {
+    const modName = el('div', 'mod-name');
+    modName.textContent = twist.label;
+    const modBlurb = el('div', 'mod-blurb');
+    modBlurb.textContent = twist.blurb;
+    root.append(modName, modBlurb);
+  }
   document.body.appendChild(root);
 
   const timer = setTimeout(() => root.classList.add('fading'), holdSeconds * 1000);

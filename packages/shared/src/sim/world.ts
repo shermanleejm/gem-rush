@@ -13,11 +13,18 @@
 
 import { MATCH, TICK_DT, type Phase } from '../config/match.ts';
 import { DEFAULT_MODE, GAME_MODES, type GameMode, type GameModeId } from '../config/modes.ts';
+import {
+  BATTLE_MODS,
+  DEFAULT_BATTLE_MOD,
+  type BattleMod,
+  type BattleModId,
+} from '../config/battleMods.ts';
 import { MAP_IDS, type MapId } from '../config/maps.ts';
 import { GRASS_SPEED_MULT, MAP, zoneAt, zoneYieldMultiplier } from '../config/map.ts';
 import {
   STARTER_UNIT_TYPES,
   UNIT_DEFS,
+  type Rarity,
   type UnitTier,
   type UnitType,
 } from '../config/units.ts';
@@ -41,14 +48,16 @@ import {
   CREEP_DAMAGE,
   CREEP_INTERVAL,
   CREEP_RANGE,
+  applyBattleModTerrain,
   chestPool,
   populateArena,
+  rollChestRarity,
+  spawnGiant,
   spawnChest,
   spawnCoin,
   spawnCreep,
   spawnFarmable,
   spawnGem,
-  spawnHatchling,
   spawnLeader,
   spawnNode,
   spawnUnit,
@@ -78,7 +87,6 @@ export interface PlayerState {
   /** Spending money. Buys chests; never counts toward score. */
   coins: number;
   chestsOpened: number;
-  respawnIn: number;
   connected: boolean;
   /** Radians; drives formation orientation. */
   facing: number;
@@ -94,8 +102,6 @@ export interface PlayerState {
   /** Pending chest offer awaiting a choice, if any. */
   offer: UnitType[] | null;
   offerChestId: EntityId;
-  /** Set while the squad is wiped and waiting to respawn. */
-  wiped: boolean;
   /** Alliance index: equals `index` in a free-for-all, shared in duos/co-op. */
   alliance: number;
   /** The three characters offered in the opening draft, until one is taken. */
@@ -106,8 +112,6 @@ export interface PlayerState {
   starterType: UnitType | null;
   /** Knocked out for good. Only ever set in elimination modes. */
   eliminated: boolean;
-  /** Collectibles this player has recovered, in modes that have them. */
-  rescued: number;
   /** Seconds until dash is available again, and how long the burst has left. */
   dashCooldown: number;
   dashRemaining: number;
@@ -136,14 +140,13 @@ export type WorldEvent =
   | { t: 'gem'; x: number; y: number; player: PlayerId; value: number }
   | { t: 'coin'; x: number; y: number; player: PlayerId; value: number }
   | { t: 'dash'; x: number; y: number; player: PlayerId }
+  | { t: 'meteor'; x: number; y: number }
   | { t: 'fusion'; x: number; y: number; player: PlayerId; unit: UnitType; tier: UnitTier }
-  | { t: 'chestOffer'; player: PlayerId; options: UnitType[]; price: number }
-  | { t: 'chestOpen'; x: number; y: number; player: PlayerId; unit: UnitType }
+  | { t: 'chestOffer'; player: PlayerId; options: UnitType[]; price: number; rarity: Rarity }
+  | { t: 'chestOpen'; x: number; y: number; player: PlayerId; unit: UnitType; dud: boolean }
   | { t: 'summon'; x: number; y: number; player: PlayerId; unit: UnitType }
   | { t: 'squadFight'; x: number; y: number; winner: PlayerId; loser: PlayerId; dropped: number }
-  | { t: 'respawn'; player: PlayerId }
   | { t: 'eliminated'; player: PlayerId }
-  | { t: 'rescue'; x: number; y: number; player: PlayerId }
   | { t: 'draftOffer'; player: PlayerId; options: UnitType[] }
   | { t: 'draftPick'; player: PlayerId; unit: UnitType }
   | { t: 'phase'; phase: Phase };
@@ -164,6 +167,8 @@ export class World {
 
   readonly mode: GameMode;
   readonly mapId: MapId;
+  /** The twist rolled for this match. Read as data; never branched on by id. */
+  readonly battleMod: BattleMod;
 
   tickNumber = 0;
   /** Seconds elapsed in the match. */
@@ -171,10 +176,9 @@ export class World {
   phase: Phase = 'lobby';
   /** Seconds left in the opening draft. */
   draftRemaining = 0;
-  /** Current ring radius in world units; Infinity when no ring is closing. */
-  ringRadius = Infinity;
   /** How many sides the match started with; fixed at `start()`. */
   private initialAlliances = 0;
+  private meteorCooldown = 0;
 
   camps: CreepCamp[] = [];
   chestSpots: { x: number; y: number }[] = [];
@@ -197,9 +201,11 @@ export class World {
     playerCount: number,
     modeId: GameModeId = DEFAULT_MODE,
     mapId?: MapId,
+    battleModId: BattleModId = DEFAULT_BATTLE_MOD,
   ) {
     this.rng = new Rng(seed);
     this.mode = GAME_MODES[modeId];
+    this.battleMod = BATTLE_MODS[battleModId];
     // One of five fixed arenas. Drawn from the match seed when the caller does
     // not name one, so a replay of the same seed lands on the same ground.
     this.mapId = mapId ?? MAP_IDS[this.rng.int(0, MAP_IDS.length)]!;
@@ -207,13 +213,8 @@ export class World {
     const populated = populateArena(this.store, this.map.tiles, this.rng);
     this.camps = populated.camps;
     this.chestSpots = populated.chestSpots;
+    applyBattleModTerrain(this.store, this.map.tiles, this.rng, this.battleMod);
 
-    if (this.mode.collectibles > 0) {
-      for (let i = 0; i < this.mode.collectibles; i++) {
-        const spot = findOpenTile(this.map.tiles, this.rng, MAP.size);
-        spawnHatchling(this.store, spot.x, spot.y);
-      }
-    }
   }
 
   // ── players ───────────────────────────────────────────────────────────────
@@ -232,22 +233,20 @@ export class World {
       coins: MATCH.startingCoins,
       chestsOpened: 0,
       nextChestPrice: MATCH.chestBasePrice,
-      respawnIn: 0,
       connected: true,
       facing: 0,
       lastAckSeq: 0,
       offer: null,
       offerChestId: 0,
-      wiped: false,
-      // In co-op everyone shares one alliance; in duos players pair up by
-      // index; otherwise each player is their own side. Deriving it here means
-      // no later step has to know which mode is running.
-      alliance: this.mode.pve ? 0 : Math.floor(index / this.mode.teamSize),
+      // Every player is their own side. Alliance stays a separate concept from
+      // team because combat asks "may I shoot this" and squads ask "whose is
+      // this", and collapsing the two is what would make teammates shoot each
+      // other the moment any shared-side mode returns.
+      alliance: index,
       draftOffer: null,
       draftAnnounced: false,
       starterType: null,
       eliminated: false,
-      rescued: 0,
       dashCooldown: 0,
       dashRemaining: 0,
     };
@@ -270,7 +269,7 @@ export class World {
   allianceScore(player: PlayerState): number {
     let total = 0;
     for (const p of this.alliesOf(player)) {
-      total += this.mode.winBy === 'collect' ? p.rescued : p.gems;
+      total += p.gems;
     }
     return total;
   }
@@ -319,10 +318,12 @@ export class World {
    * are about to fill keeps the curve honest in both directions — rebuilding is
    * cheap, and running away with a huge squad gets steadily more expensive.
    */
-  chestPriceFor(player: PlayerState): number {
+  chestPriceFor(player: PlayerState, rarity: Rarity = 'common'): number {
     const size = this.squadSize(player.index);
     const discount = this.aurasOf(player.id).chestDiscount;
-    return Math.max(1, Math.round(MATCH.chestBasePrice + size * MATCH.chestPriceStep - discount));
+    if (this.battleMod.flatChestPrice !== null) return this.battleMod.flatChestPrice;
+    const base = MATCH.chestBasePrice + size * MATCH.chestPriceStep;
+    return Math.max(1, Math.round(base * MATCH.rarityPriceMultiplier[rarity] - discount));
   }
 
   leaderOf(player: PlayerState): Entity | undefined {
@@ -342,7 +343,6 @@ export class World {
     this.elapsed = 0;
     this.tickNumber = 0;
     this.draftRemaining = MATCH.draftSeconds;
-    this.ringRadius = Infinity;
 
     for (const player of this.players.values()) {
       const pool = this.rng.shuffle(STARTER_UNIT_TYPES.slice());
@@ -382,8 +382,9 @@ export class World {
       if (!player.starterType) this.chooseStarter(player, 0);
       const type = player.starterType ?? STARTER_UNIT_TYPES[0]!;
       const pad = this.map.homePads[player.index % this.map.homePads.length]!;
+      const tier = Math.min(this.battleMod.startingTier, this.battleMod.maxTier) as UnitTier;
       for (let i = 0; i < MATCH.startingUnitCount; i++) {
-        const unit = spawnUnit(this.store, player.index, type, 0, pad.x, pad.y + 0.6 + i * 0.3);
+        const unit = spawnUnit(this.store, player.index, type, tier, pad.x, pad.y + 0.6 + i * 0.3);
         unit.alliance = player.alliance;
       }
     }
@@ -424,6 +425,8 @@ export class World {
     this.updateFormations(dt);
     // 4 + 5. Acquire targets, resolve attacks and healing
     this.resolveCombat(dt);
+    // 4b. Battle-mod spawns that arrive over time.
+    this.updateMeteors(dt);
     // 5a. Leaders chip away at scenery they are standing on.
     this.resolveLeaderHarvest(dt);
     // 5b. Summoners field their helpers.
@@ -434,9 +437,6 @@ export class World {
     this.resolvePickups(inputs, dt);
     // 8. Squad-vs-squad collision outcomes
     this.resolveSquadCollisions();
-    // 8b. Mode rules: the closing ring, and rescue pickups.
-    if (this.mode.ring) this.updateRing(dt);
-    if (this.mode.collectibles > 0) this.resolveRescues();
     // 9. Respawn timers, node respawns, creep camp respawns
     this.resolveRespawns(dt);
     // 10. Phase/timer update
@@ -486,60 +486,6 @@ export class World {
     this.draftRemaining -= dt;
     const everyonePicked = [...this.players.values()].every((p) => p.starterType !== null);
     if (everyonePicked || this.draftRemaining <= 0) this.start();
-  }
-
-  /**
-   * Close the ring and burn anything caught outside it.
-   *
-   * The ring is centred on the map and shrinks toward — but never to — a point,
-   * so there is always somewhere to stand at the end. Damage is dealt to units
-   * rather than leaders, because leaders are invulnerable (§1.7): a leader
-   * stranded outside simply loses their squad and is then wiped normally, which
-   * routes elimination through the one code path that already handles it.
-   */
-  private updateRing(dt: number): void {
-    const centre = MAP.size / 2;
-    const start = MAP.size * 0.75;
-    const end = MAP.size * 0.12;
-
-    const t = clamp(
-      (this.elapsed - this.mode.ringDelaySeconds) / Math.max(1, this.mode.ringCloseSeconds),
-      0,
-      1,
-    );
-    this.ringRadius = this.elapsed < this.mode.ringDelaySeconds ? start : start + (end - start) * t;
-
-    const rSq = this.ringRadius * this.ringRadius;
-    const damage = this.mode.ringDamagePerSecond * dt;
-    for (const e of this.store.items) {
-      if (!e.alive || e.kind !== 'unit') continue;
-      if (distanceSq(e.x, e.y, centre, centre) <= rSq) continue;
-      e.hp -= damage;
-      e.lastDamagedAt = this.elapsed;
-      if (e.hp <= 0) {
-        e.hp = 0;
-        this.events.push({ t: 'death', x: e.x, y: e.y, id: e.id, kind: e.kind });
-        this.store.despawn(e);
-      }
-    }
-  }
-
-  /** Leaders walking over a hatchling bank it for their side. */
-  private resolveRescues(): void {
-    for (const player of this.players.values()) {
-      if (player.eliminated) continue;
-      const leader = this.leaderOf(player);
-      if (!leader) continue;
-
-      for (const e of this.store.items) {
-        if (!e.alive || e.kind !== 'hatchling') continue;
-        const reach = leader.radius + e.radius + 0.35;
-        if (distanceSq(leader.x, leader.y, e.x, e.y) > reach * reach) continue;
-        player.rescued += 1;
-        this.events.push({ t: 'rescue', x: e.x, y: e.y, player: player.id });
-        this.store.despawn(e);
-      }
-    }
   }
 
   /**
@@ -608,7 +554,7 @@ export class World {
    */
   private resolveLeaderHarvest(dt: number): void {
     for (const player of this.players.values()) {
-      if (player.wiped || player.eliminated) continue;
+      if (player.eliminated) continue;
       const leader = this.leaderOf(player);
       if (!leader) continue;
 
@@ -641,6 +587,23 @@ export class World {
     }
   }
 
+  /**
+   * Drop in a monster on a timer, for Mods that keep seeding the map.
+   * Placed anywhere open rather than centre-biased: the point is that they
+   * land on top of you wherever you happen to be farming.
+   */
+  private updateMeteors(dt: number): void {
+    const every = this.battleMod.meteorIntervalSeconds;
+    if (every <= 0) return;
+    this.meteorCooldown -= dt;
+    if (this.meteorCooldown > 0) return;
+    this.meteorCooldown = every;
+
+    const spot = findOpenTile(this.map.tiles, this.rng, this.map.size);
+    const giant = spawnGiant(this.store, spot.x, spot.y);
+    this.events.push({ t: 'meteor', x: giant.x, y: giant.y });
+  }
+
   private resolveSummons(dt: number): void {
     for (const player of this.players.values()) {
       const squad = this.squads.get(player.id) ?? [];
@@ -670,7 +633,7 @@ export class World {
       if (!leader) continue;
 
       const input = inputs.get(player.id);
-      if (!input || player.wiped) {
+      if (!input || player.eliminated) {
         leader.vx = 0;
         leader.vy = 0;
         continue;
@@ -974,7 +937,8 @@ export class World {
       }
     }
 
-    base *= this.mode.economyScale;
+    base *= this.mode.economyScale * this.battleMod.lootMultiplier;
+    if (source.kind === 'creep') base *= this.battleMod.creepGemMultiplier;
     if (this.phase === 'lastCall') base *= MATCH.lastCallMultiplier;
     return Math.max(1, Math.round(base));
   }
@@ -995,7 +959,7 @@ export class World {
     for (const e of this.store.items) {
       if (!e.alive || e.hp > 0) continue;
       if (e.kind === 'leader' || e.kind === 'gem' || e.kind === 'coin') continue;
-      if (e.kind === 'chest' || e.kind === 'hatchling') continue;
+      if (e.kind === 'chest') continue;
 
       const killerTeam = killerByTarget.get(e.id) ?? TEAM_NEUTRAL;
       this.events.push({ t: 'death', x: e.x, y: e.y, id: e.id, kind: e.kind });
@@ -1067,7 +1031,10 @@ export class World {
   private coinValueFor(source: Entity): number {
     let base = source.coinValue;
     if (base <= 0) return 0;
-    base *= zoneYieldMultiplier(zoneAt(source.x, source.y)) * this.mode.economyScale;
+    base *=
+      zoneYieldMultiplier(zoneAt(source.x, source.y)) *
+      this.mode.economyScale *
+      this.battleMod.lootMultiplier;
     if (this.phase === 'lastCall') base *= MATCH.lastCallMultiplier;
     return Math.max(1, Math.round(base));
   }
@@ -1101,7 +1068,7 @@ export class World {
 
     for (const player of this.players.values()) {
       const leader = this.leaderOf(player);
-      if (!leader || player.wiped) continue;
+      if (!leader || player.eliminated) continue;
 
       // Gems — the leader hoovers them up within a generous radius so
       // collection doesn't demand pixel-accurate steering on a phone.
@@ -1154,9 +1121,10 @@ export class World {
         if (!e.alive || e.kind !== 'chest') continue;
         const reach = leader.radius + e.radius + 0.3;
         if (distanceSq(leader.x, leader.y, e.x, e.y) > reach * reach) continue;
-        if (player.coins < this.chestPriceFor(player)) continue;
+        const rarity = this.battleMod.forceRarity ?? e.rarity ?? 'common';
+        if (player.coins < this.chestPriceFor(player, rarity)) continue;
 
-        const pool = chestPool(this.elapsed);
+        const pool = chestPool(rarity);
         const options: UnitType[] = [];
         const shuffled = this.rng.shuffle(pool.slice());
         for (const t of shuffled) {
@@ -1169,7 +1137,8 @@ export class World {
           t: 'chestOffer',
           player: player.id,
           options,
-          price: this.chestPriceFor(player),
+          price: this.chestPriceFor(player, rarity),
+          rarity,
         });
         break;
       }
@@ -1182,7 +1151,7 @@ export class World {
     const chest = this.store.get(player.offerChestId);
     const choice = offer[clamp(choiceIndex, 0, offer.length - 1)];
 
-    const price = this.chestPriceFor(player);
+    const price = this.chestPriceFor(player, chest?.rarity ?? 'common');
     player.offer = null;
     player.offerChestId = 0;
     if (!choice || !chest) return;
@@ -1197,9 +1166,27 @@ export class World {
     const leader = this.leaderOf(player);
     const sx = leader ? leader.x : chest.x;
     const sy = leader ? leader.y : chest.y;
-    spawnUnit(this.store, player.index, choice, 0, sx, sy);
 
-    this.events.push({ t: 'chestOpen', x: chest.x, y: chest.y, player: player.id, unit: choice });
+    // A dud pays nothing, but the coins are gone and the chest is consumed —
+    // that is the whole gamble. Decided here rather than at spawn so a player
+    // cannot tell a fake from a real one before committing.
+    const dud = this.battleMod.fakeChestChance > 0 && this.rng.chance(this.battleMod.fakeChestChance);
+    if (!dud) {
+      const copies = Math.max(1, this.battleMod.chestUnitsPerBuy);
+      for (let i = 0; i < copies; i++) {
+        if (this.squadSize(player.index) >= MATCH.squadCap) break;
+        spawnUnit(this.store, player.index, choice, 0, sx + i * 0.3, sy);
+      }
+    }
+
+    this.events.push({
+      t: 'chestOpen',
+      x: chest.x,
+      y: chest.y,
+      player: player.id,
+      unit: choice,
+      dud,
+    });
 
     // Consume the chest and queue a replacement elsewhere, so chest locations
     // move around the map over a match instead of becoming fixed camps.
@@ -1208,7 +1195,7 @@ export class World {
     this.chestRespawns.push({ x: spot.x, y: spot.y, in: 6 });
 
     const fusions: FusionResult[] = [];
-    applyFusions(this.store, this.squadOf(player.index), fusions);
+    applyFusions(this.store, this.squadOf(player.index), fusions, this.battleMod.maxTier);
     for (const f of fusions) {
       this.events.push({
         t: 'fusion',
@@ -1233,7 +1220,7 @@ export class World {
     const contactSq = contact * contact;
 
     for (const loser of this.players.values()) {
-      if (loser.wiped || loser.eliminated) continue;
+      if (loser.eliminated) continue;
       const squad = this.squads.get(loser.id) ?? [];
       const stillAlive = squad.filter((u) => u.alive && u.hp > 0);
       if (stillAlive.length > 0) continue;
@@ -1259,15 +1246,11 @@ export class World {
         }
       }
 
-      loser.wiped = true;
-      loser.respawnIn = MATCH.respawnSeconds;
-      // Elimination does not care *who* finished the squad off. Creeps, the
-      // closing ring and a rival all leave you with no units, and only the last
-      // of those used to count — so you could be wiped by the map and carry on.
-      if (this.mode.elimination) {
-        loser.eliminated = true;
-        this.events.push({ t: 'eliminated', player: loser.id });
-      }
+      // Losing your squad ends your run, and it does not matter who finished
+      // it off — a creep camp counts the same as a rival. Only a rival used to,
+      // so you could be wiped by the map and simply carry on.
+      loser.eliminated = true;
+      this.events.push({ t: 'eliminated', player: loser.id });
 
       const dropped = Math.floor(loser.gems * MATCH.gemLossFraction);
       if (dropped > 0) {
@@ -1294,33 +1277,6 @@ export class World {
   }
 
   private resolveRespawns(dt: number): void {
-    for (const player of this.players.values()) {
-      // Elimination modes never bring anyone back; the wipe is the end of
-      // their match and the timer below must not undo it.
-      if (!player.wiped || player.eliminated) continue;
-      player.respawnIn -= dt;
-      if (player.respawnIn > 0) continue;
-
-      const pad = this.map.homePads[player.index % this.map.homePads.length]!;
-      const leader = this.leaderOf(player);
-      if (leader) {
-        leader.x = pad.x;
-        leader.y = pad.y;
-        leader.vx = 0;
-        leader.vy = 0;
-      }
-      // Rebuild around the character they drafted, not a fixed default — the
-      // starter is that player's identity for the match, and handing them
-      // somebody else's unit on respawn would quietly undo their pick.
-      const type = player.starterType ?? STARTER_UNIT_TYPES[0]!;
-      for (let i = 0; i < MATCH.respawnUnitCount; i++) {
-        const unit = spawnUnit(this.store, player.index, type, 0, pad.x, pad.y + 0.5 + i * 0.3);
-        unit.alliance = player.alliance;
-      }
-      player.wiped = false;
-      player.respawnIn = 0;
-      this.events.push({ t: 'respawn', player: player.id });
-    }
 
     for (let i = this.nodeRespawns.length - 1; i >= 0; i--) {
       const r = this.nodeRespawns[i]!;
@@ -1344,7 +1300,9 @@ export class World {
       const r = this.chestRespawns[i]!;
       r.in -= dt;
       if (r.in <= 0) {
-        spawnChest(this.store, r.x, r.y);
+        // Roll rarity at respawn time, so the map's mix drifts toward the
+        // richer chests as the match goes on rather than being fixed at build.
+        spawnChest(this.store, r.x, r.y, rollChestRarity(this.rng, this.elapsed));
         this.chestRespawns.splice(i, 1);
       }
     }
@@ -1370,7 +1328,7 @@ export class World {
     this.elapsed += dt;
     const remaining = this.mode.matchSeconds - this.elapsed;
 
-    if (this.mode.timed && this.phase === 'playing' && remaining <= this.mode.lastCallSeconds) {
+    if (this.phase === 'playing' && remaining <= this.mode.lastCallSeconds) {
       this.phase = 'lastCall';
       this.events.push({ t: 'phase', phase: 'lastCall' });
     }
@@ -1393,14 +1351,12 @@ export class World {
     // Guarded on there having been more than one side to begin with, or a solo
     // match satisfies "one side remains" on its very first tick and ends
     // instantly.
-    if (this.mode.elimination && this.initialAlliances > 1) {
+    if (this.initialAlliances > 1) {
       const sides = new Set<number>();
       for (const p of this.players.values()) if (!p.eliminated) sides.add(p.alliance);
       if (sides.size <= 1) return true;
     }
 
-    // Co-op ends the moment the last collectible is home.
-    if (this.mode.winBy === 'collect') return this.store.count('hatchling') === 0;
     return false;
   }
 
@@ -1426,11 +1382,9 @@ export class World {
       eliminated: p.eliminated,
     }));
 
-    if (this.mode.winBy === 'survival') {
-      return rows.sort(
-        (a, b) => Number(a.eliminated) - Number(b.eliminated) || b.gems - a.gems,
-      );
-    }
+    // Survivors above the busted, then by gems. Being eliminated with a big
+    // bank should still beat surviving with nothing, but only among equals —
+    // finishing the match is worth something.
     return rows.sort((a, b) => b.score - a.score);
   }
 }

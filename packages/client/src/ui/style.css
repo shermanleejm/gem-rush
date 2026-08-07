@@ -753,3 +753,21 @@ button.secondary {
 .score-row.out {
   opacity: 0.45;
 }
+
+/* The Battle Mod, on the pre-match card. It is the thing that differs match to
+   match, so it reads as a separate announcement rather than more objective. */
+.mod-name {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  font-size: 17px;
+  font-weight: 800;
+  color: var(--warn);
+}
+
+.mod-blurb {
+  margin-top: 3px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--ink);
+}

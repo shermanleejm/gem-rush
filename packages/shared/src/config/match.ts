@@ -1,5 +1,7 @@
 /** Match rules (brief §1.4) and the tick contract (§2.4). All tunable data. */
 
+import type { Rarity } from './units.ts';
+
 export const TICK_RATE = 20;
 export const TICK_DT = 1 / TICK_RATE;
 export const INPUT_RATE = 30;
@@ -33,10 +35,6 @@ export interface MatchConfig {
   chestPriceStep: number;
   chestOfferCount: number;
   fusionThreshold: number;
-  /** Seconds before a wiped squad respawns at its home pad. */
-  respawnSeconds: number;
-  /** Free copies of the player's starting character granted on respawn. */
-  respawnUnitCount: number;
   /** Fraction of banked gems scattered when you lose a squad fight. */
   gemLossFraction: number;
   /**
@@ -75,8 +73,22 @@ export interface MatchConfig {
   dashSpeed: number;
   dashSeconds: number;
   dashCooldownSeconds: number;
-  /** Seconds after match start before the late-unlock archetypes enter chests. */
-  lateUnlockSeconds: number;
+  /**
+   * When each rarity starts appearing in chests.
+   *
+   * Commons from the opening whistle, Rares partway in, Epics late. The window
+   * where only Commons exist is what keeps an economy opening viable: nobody
+   * can buy their way to a stat lead in the first minute, so farming crates and
+   * felling trees is a real strategy rather than a slower way to lose.
+   */
+  rarityUnlockSeconds: Record<Rarity, number>;
+  /**
+   * Price multiplier per rarity. An Epic chest is a genuine investment, not the
+   * same coin as a Goblin.
+   */
+  rarityPriceMultiplier: Record<Rarity, number>;
+  /** Relative odds of each unlocked rarity appearing on a chest. */
+  rarityWeight: Record<Rarity, number>;
   /** Base leader move speed, world units per second. */
   leaderSpeed: number;
   /** Squad units move slightly faster than the leader so they can catch up. */
@@ -113,8 +125,6 @@ export const MATCH: MatchConfig = {
   chestPriceStep: 3,
   chestOfferCount: 3,
   fusionThreshold: 3,
-  respawnSeconds: 5,
-  respawnUnitCount: 2,
   gemLossFraction: 0.2,
   coinLossFraction: 0.35,
   leaderHarvestDamage: 7,
@@ -123,7 +133,11 @@ export const MATCH: MatchConfig = {
   dashSpeed: 3.2,
   dashSeconds: 0.22,
   dashCooldownSeconds: 4.5,
-  lateUnlockSeconds: 120,
+  rarityUnlockSeconds: { common: 0, rare: 70, epic: 145 },
+  rarityPriceMultiplier: { common: 1, rare: 1.7, epic: 2.6 },
+  // Commons stay the common case even once the others unlock, so the cheap
+  // rebuild is always on the table.
+  rarityWeight: { common: 3, rare: 2, epic: 1 },
   leaderSpeed: 4.2,
   squadCatchupSpeed: 1.35,
   reconnectGraceSeconds: 30,

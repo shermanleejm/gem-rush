@@ -8,6 +8,7 @@
 
 import type { MatchConfig } from '../config/match.ts';
 import type { GameModeId } from '../config/modes.ts';
+import type { BattleModId } from '../config/battleMods.ts';
 import type { MapId } from '../config/maps.ts';
 import type { UnitTier, UnitType } from '../config/units.ts';
 import type { EntityId } from '../sim/entities.ts';
@@ -77,6 +78,8 @@ export interface StartMsg {
   playerCount: number;
   /** Drawn at random per match; clients need it to render the right rules. */
   mode: GameModeId;
+  /** The rule twist for this match, announced on the pre-match card. */
+  battleMod: BattleModId;
   /** Index assigned to each player, so clients can colour teams consistently. */
   assignments: { id: PlayerId; index: number; name: string }[];
 }
@@ -109,12 +112,9 @@ export interface PlayerWire {
   dc: number;
   /** Next chest price for this player. */
   p: number;
-  wiped: boolean;
   offer?: UnitType[];
   /** Alliance index, so clients can colour duo partners as one side. */
   a: number;
-  /** Collectibles recovered, in modes that have them. */
-  r: number;
   /** Knocked out for good. */
   out: boolean;
   /** The opening draft offer, present only during the draft phase. */
@@ -131,8 +131,6 @@ export interface SnapshotMsg {
   /** Match seconds remaining. */
   time: number;
   phase: string;
-  /** Closing-ring radius in world units; omitted when no ring is in play. */
-  ring?: number;
   /** Full snapshot (join / every 100 ticks) vs delta. */
   full: boolean;
   entities: EntityWire[];

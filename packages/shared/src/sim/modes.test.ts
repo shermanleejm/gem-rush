@@ -9,7 +9,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { MATCH, TICK_DT } from '../config/match.ts';
-import { GAME_MODES, GAME_MODE_IDS, eligibleModes } from '../config/modes.ts';
+import { GAME_MODES, eligibleModes } from '../config/modes.ts';
 import {
   PLAYABLE_UNIT_TYPES,
   STARTER_UNIT_TYPES,
@@ -18,8 +18,9 @@ import {
   UNIT_TYPES,
   gemMultiplier,
 } from '../config/units.ts';
+import { Rng } from '../math/rng.ts';
 import { squadAuras } from './auras.ts';
-import { spawnUnit } from './spawning.ts';
+import { rollChestRarity, spawnUnit, unlockedRarities } from './spawning.ts';
 import { World, type InputCommand } from './world.ts';
 
 const idle = (ids: number[]): Map<number, InputCommand> =>
@@ -153,92 +154,32 @@ describe('the opening draft', () => {
     expect(w.squadOf(p.index)).toHaveLength(MATCH.startingUnitCount);
   });
 
-  it('respawns the character the player drafted, not a default', () => {
-    // A mode that rebuilds rather than eliminates, so there is a respawn to check.
-    const w = new World(23, 2, 'duoGemHunt');
+  it('spawns the drafted character, and only that one', () => {
+    const w = new World(23, 2);
     const p = w.addPlayer(1, 'Solo');
+    w.addPlayer(2, 'Other');
     w.beginDraft();
     w.tick(new Map([[1, { seq: 1, dirX: 0, dirY: 0, draftChoice: 0 }]]));
-
-    const chosen = p.starterType!;
-    for (const u of w.squadOf(p.index)) w.store.despawn(u);
-
-    const ticks = Math.ceil(MATCH.respawnSeconds / TICK_DT) + 4;
-    for (let i = 0; i < ticks; i++) w.tick(idle([1]));
+    w.tick(new Map([[2, { seq: 1, dirX: 0, dirY: 0, draftChoice: 0 }]]));
 
     const squad = w.squadOf(p.index);
-    expect(squad.length).toBeGreaterThan(0);
-    for (const u of squad) expect(u.unitType).toBe(chosen);
+    expect(squad).toHaveLength(MATCH.startingUnitCount);
+    for (const u of squad) expect(u.unitType).toBe(p.starterType);
   });
 });
 
-describe('game modes', () => {
-  it('always offers at least one eligible mode for any lobby size', () => {
-    for (let n = 1; n <= 8; n++) expect(eligibleModes(n).length).toBeGreaterThan(0);
+describe('the match', () => {
+  it('offers Gem Hunt at every headcount', () => {
+    for (let n = 1; n <= 8; n++) expect(eligibleModes(n)).toEqual(['gemHunt']);
   });
 
-  it('only offers duos to even lobbies of four or more', () => {
-    for (const n of [1, 2, 3, 5, 7]) expect(eligibleModes(n)).not.toContain('duoGemHunt');
-    for (const n of [4, 6, 8]) expect(eligibleModes(n)).toContain('duoGemHunt');
+  it('has a hard time ceiling so a match cannot run forever', () => {
+    expect(GAME_MODES.gemHunt.matchSeconds).toBeGreaterThan(0);
   });
 
-  it('gives every mode a hard time ceiling so none can run forever', () => {
-    for (const id of GAME_MODE_IDS) expect(GAME_MODES[id].matchSeconds).toBeGreaterThan(0);
-  });
-
-  it('duos share a score and never target each other', () => {
-    const w = new World(31, 4, 'duoGemHunt');
-    const players = [1, 2, 3, 4].map((i) => w.addPlayer(i, `P${i}`));
-    w.beginDraft();
-    w.start();
-
-    const [p1, p2, p3] = players;
-    expect(p1!.alliance).toBe(p2!.alliance);
-    expect(p1!.alliance).not.toBe(p3!.alliance);
-
-    p1!.gems = 10;
-    p2!.gems = 7;
-    expect(w.allianceScore(p1!)).toBe(17);
-    expect(w.allianceScore(p2!)).toBe(17);
-    expect(w.allianceScore(p3!)).toBe(0);
-
-    // Units of allied players must be mutually untargetable. Asserting on
-    // *targeting* rather than on HP matters: the centre of the map has creep
-    // camps, so a full-HP assertion would fail on incidental creep damage and
-    // say nothing at all about friendly fire.
-    const u1 = spawnUnit(w.store, p1!.index, 'brute', 0, 32, 32);
-    u1.alliance = p1!.alliance;
-    const u2 = spawnUnit(w.store, p2!.index, 'brute', 0, 32.3, 32);
-    u2.alliance = p2!.alliance;
-    for (let i = 0; i < 40; i++) {
-      w.tick(idle([1, 2, 3, 4]));
-      expect(u1.targetId).not.toBe(u2.id);
-      expect(u2.targetId).not.toBe(u1.id);
-    }
-  });
-
-  it('showdown eliminates a wiped squad instead of respawning it', () => {
-    const w = new World(32, 3, 'showdown');
+  it('ends once a single side is left standing', () => {
+    const w = new World(32, 3);
     const players = [1, 2, 3].map((i) => w.addPlayer(i, `P${i}`));
-    w.beginDraft();
-    w.start();
-
-    const victim = players[0]!;
-    for (const u of w.squadOf(victim.index)) w.store.despawn(u);
-    w.tick(idle([1, 2, 3]));
-    expect(victim.eliminated).toBe(true);
-
-    const ticks = Math.ceil(MATCH.respawnSeconds / TICK_DT) + 5;
-    for (let i = 0; i < ticks; i++) w.tick(idle([1, 2, 3]));
-    // Still out, and no free squad handed back.
-    expect(victim.eliminated).toBe(true);
-    expect(w.squadOf(victim.index)).toHaveLength(0);
-  });
-
-  it('showdown ends when one side is left', () => {
-    const w = new World(33, 3, 'showdown');
-    const players = [1, 2, 3].map((i) => w.addPlayer(i, `P${i}`));
-    w.beginDraft();
     w.start();
 
     for (const p of players.slice(0, 2)) {
@@ -248,69 +189,54 @@ describe('game modes', () => {
     expect(w.phase).toBe('ended');
   });
 
-  it('showdown closes a ring that damages units left outside', () => {
-    const w = new World(34, 3, 'showdown');
-    const p = w.addPlayer(1, 'Edge');
-    w.addPlayer(2, 'B');
-    w.addPlayer(3, 'C');
-    w.beginDraft();
+  it('does not end a solo match on its very first tick', () => {
+    // "One side remains" is trivially true with one player, which used to end
+    // the match instantly.
+    const w = new World(33, 1);
+    w.addPlayer(1, 'Solo');
     w.start();
-
-    // Skip past the grace period, to the point the ring has fully closed.
-    w.elapsed = w.mode.ringDelaySeconds + w.mode.ringCloseSeconds;
-    const stray = spawnUnit(w.store, p.index, 'golem', 0, 1.5, 1.5);
-    const before = stray.hp;
-    for (let i = 0; i < 20; i++) w.tick(idle([1, 2, 3]));
-
-    expect(w.ringRadius).toBeLessThan(64);
-    expect(stray.hp).toBeLessThan(before);
+    for (let i = 0; i < 20; i++) w.tick(idle([1]));
+    expect(w.phase).toBe('playing');
   });
 
-  it('hatchling run is co-op: collectibles exist and squads cannot fight', () => {
-    const w = new World(35, 2, 'hatchlingRun');
-    const a = w.addPlayer(1, 'A');
-    const b = w.addPlayer(2, 'B');
-    w.beginDraft();
+  it('ranks by gems', () => {
+    const w = new World(37, 2);
+    const a = w.addPlayer(1, 'Rich');
+    const b = w.addPlayer(2, 'Poor');
     w.start();
-
-    expect(w.store.count('hatchling')).toBe(GAME_MODES.hatchlingRun.collectibles);
-    expect(a.alliance).toBe(b.alliance);
-
-    const ua = spawnUnit(w.store, a.index, 'brute', 0, 32, 32);
-    ua.alliance = a.alliance;
-    const ub = spawnUnit(w.store, b.index, 'brute', 0, 32.3, 32);
-    ub.alliance = b.alliance;
-    for (let i = 0; i < 40; i++) w.tick(idle([1, 2]));
-    expect(ua.hp).toBe(ua.maxHp);
-  });
-
-  it('hatchling run banks a rescue when the leader reaches one', () => {
-    const w = new World(36, 1, 'hatchlingRun');
-    const p = w.addPlayer(1, 'Rescuer');
-    w.beginDraft();
-    w.start();
-
-    const leader = w.leaderOf(p)!;
-    const chick = w.store.ofKind('hatchling')[0]!;
-    chick.x = leader.x;
-    chick.y = leader.y;
-
-    w.tick(idle([1]));
-    expect(p.rescued).toBe(1);
-    expect(w.store.get(chick.id)).toBeUndefined();
-  });
-
-  it('ranks by what the mode counts, not always by gems', () => {
-    const w = new World(37, 2, 'hatchlingRun');
-    const a = w.addPlayer(1, 'Collector');
-    const b = w.addPlayer(2, 'Miner');
-    w.beginDraft();
-    w.start();
-
-    // b has more gems, a has more rescues. In this mode a must rank first.
-    a.rescued = 3;
-    b.gems = 500;
+    a.gems = 40;
+    b.gems = 5;
     expect(w.standings()[0]!.id).toBe(a.id);
+  });
+});
+
+describe('rarity gating', () => {
+  it('opens with Commons only, then widens', () => {
+    expect(unlockedRarities(0)).toEqual(['common']);
+    expect(unlockedRarities(MATCH.rarityUnlockSeconds.rare)).toContain('rare');
+    expect(unlockedRarities(MATCH.rarityUnlockSeconds.rare)).not.toContain('epic');
+    expect(unlockedRarities(MATCH.rarityUnlockSeconds.epic)).toContain('epic');
+  });
+
+  it('never rolls a rarity that has not unlocked', () => {
+    const rng = new Rng(4242);
+    for (let i = 0; i < 200; i++) expect(rollChestRarity(rng, 0)).toBe('common');
+    for (let i = 0; i < 200; i++) {
+      expect(rollChestRarity(rng, MATCH.rarityUnlockSeconds.rare)).not.toBe('epic');
+    }
+  });
+
+  it('prices a rarer chest higher', () => {
+    const w = new World(45, 1);
+    const p = w.addPlayer(1, 'Buyer');
+    w.start();
+    const common = w.chestPriceFor(p, 'common');
+    expect(w.chestPriceFor(p, 'rare')).toBeGreaterThan(common);
+    expect(w.chestPriceFor(p, 'epic')).toBeGreaterThan(w.chestPriceFor(p, 'rare'));
+  });
+
+  it('starts everyone on a Common, so nobody opens with an Epic', () => {
+    for (const t of STARTER_UNIT_TYPES) expect(UNIT_DEFS[t].rarity).toBe('common');
   });
 });
 

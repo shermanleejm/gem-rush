@@ -15,6 +15,11 @@ import { MATCH, TICK_DT, TICK_RATE } from '../config/match.ts';
 import { UNIT_TYPES } from '../config/units.ts';
 import { BOT_POLICIES, botInput, makeBot, type Bot } from '../sim/bots.ts';
 import { DEFAULT_MODE, eligibleModes, type GameModeId } from '../config/modes.ts';
+import {
+  DEFAULT_BATTLE_MOD,
+  ROLLABLE_BATTLE_MODS,
+  type BattleModId,
+} from '../config/battleMods.ts';
 import type {
   ClientMessage,
   EntityWire,
@@ -72,6 +77,8 @@ export class Room {
   private seed = 0;
   /** The mode this match is running. Drawn at random in `start()`. */
   mode: GameModeId = DEFAULT_MODE;
+  /** The rule twist rolled for this match. */
+  battleMod: BattleModId = DEFAULT_BATTLE_MOD;
   /**
    * Bots that pad the lobby out to a full house.
    *
@@ -290,7 +297,13 @@ export class Room {
     const botCount = Math.max(0, MATCH.maxPlayers - participants.length);
     const total = participants.length + botCount;
 
-    this.world = new World(this.seed, total, this.mode);
+    // One twist per match. Gem Hunt is the only mode, so this is where the
+    // round-to-round variety comes from.
+    this.battleMod =
+      ROLLABLE_BATTLE_MODS[Math.floor(Math.random() * ROLLABLE_BATTLE_MODS.length)] ??
+      DEFAULT_BATTLE_MOD;
+
+    this.world = new World(this.seed, total, this.mode, undefined, this.battleMod);
     for (const m of participants) {
       this.world.addPlayer(m.id, m.name);
       m.lastSent.clear();
@@ -331,6 +344,7 @@ export class Room {
         tick0: 0,
         playerCount: participants.length,
         mode: this.mode,
+        battleMod: this.battleMod,
         map: this.world!.mapId,
         assignments,
       });
@@ -474,9 +488,7 @@ export class Room {
       // The discounted price, since that is what the player will actually be
       // charged — showing the undiscounted one would make Suppliers look broken.
       p: world.chestPriceFor(p),
-      wiped: p.wiped,
       a: p.alliance,
-      r: p.rescued,
       out: p.eliminated,
       ...(p.offer ? { offer: p.offer } : {}),
       ...(p.draftOffer && !p.starterType ? { draft: p.draftOffer } : {}),
@@ -510,7 +522,6 @@ export class Room {
         ackSeq: m.input.seq,
         time: world.phase === 'draft' ? world.draftRemaining : world.timeRemaining,
         phase: world.phase,
-        ...(Number.isFinite(world.ringRadius) ? { ring: world.ringRadius } : {}),
         full: wantFull,
         entities,
         removed,

@@ -9,8 +9,8 @@
 import { describe, expect, it } from 'vitest';
 
 import { MATCH, TICK_DT } from '../config/match.ts';
-import { PLAYABLE_UNIT_TYPES, STARTER_UNIT_TYPES, UNIT_DEFS } from '../config/units.ts';
-import { chestPool, spawnProp, spawnUnit } from './spawning.ts';
+import { PLAYABLE_UNIT_TYPES, RARITIES, STARTER_UNIT_TYPES, UNIT_DEFS } from '../config/units.ts';
+import { chestPool, spawnProp, spawnUnit, unlockedRarities } from './spawning.ts';
 import { World, type InputCommand } from './world.ts';
 
 function input(dirX: number, dirY: number, seq = 1): Map<number, InputCommand> {
@@ -129,11 +129,7 @@ describe('the core loop (§1.3)', () => {
   });
 
   it('a full match runs to completion and produces a winner', () => {
-    // Duos, because this test is about the economy closing over four minutes
-    // and Gem Hunt now eliminates on a wipe — bots that drive straight into the
-    // toughest camp with one unit would be out before they earned anything, and
-    // the test would be measuring that rather than the loop.
-    const world = new World(31337, 4, 'duoGemHunt');
+    const world = new World(31337, 4);
     for (let i = 0; i < 4; i++) world.addPlayer(i + 1, `P${i + 1}`);
     world.start();
 
@@ -180,22 +176,21 @@ describe('the core loop (§1.3)', () => {
     expect(standings.reduce((n, r) => n + r.gems, 0)).toBeGreaterThan(0);
   });
 
-  it('a wiped squad respawns at its pad with free units (§1.4)', () => {
-    // Duos keep the rebuild rule; solo Gem Hunt eliminates instead.
-    const world = new World(555, 2, 'duoGemHunt');
+  it('losing your whole squad busts you out of the match (§1.4)', () => {
+    const world = new World(555, 2);
     const player = world.addPlayer(1, 'Wiped');
+    world.addPlayer(2, 'Rival');
     world.start();
 
     for (const u of world.squadOf(player.index)) world.store.despawn(u);
     world.tick(input(0, 0));
-    expect(player.wiped).toBe(true);
+    expect(player.eliminated).toBe(true);
 
-    const respawnTicks = Math.ceil(MATCH.respawnSeconds / TICK_DT) + 3;
-    for (let i = 0; i < respawnTicks; i++) world.tick(input(0, 0));
-
-    expect(player.wiped).toBe(false);
-    const expected = MATCH.respawnUnitCount;
-    expect(world.squadOf(player.index).length).toBe(expected);
+    // And stays out. There is no rebuild timer to wait through any more, so a
+    // bust has to be permanent rather than a five-second inconvenience.
+    for (let i = 0; i < 200; i++) world.tick(input(0, 0));
+    expect(player.eliminated).toBe(true);
+    expect(world.squadOf(player.index)).toHaveLength(0);
   });
 
   it('last call doubles gem value (§1.3)', () => {
@@ -251,21 +246,28 @@ describe('unit definitions', () => {
     }
   });
 
-  it('the early pool is a small, playable subset of the roster (§1.5)', () => {
-    const early = PLAYABLE_UNIT_TYPES.filter((t) => UNIT_DEFS[t].earlyPool);
+  it('chests offer Commons only until the later rarities unlock (§1.5)', () => {
+    // The Common-only opening is what keeps an economy start viable: nobody can
+    // buy a stat lead in the first minute, so farming crates is a real plan
+    // rather than a slower way to lose.
+    expect(unlockedRarities(0)).toEqual(['common']);
 
-    // Enough to make the first chest a real choice, few enough that the roster
-    // still opens up at the unlock time rather than being available at once.
-    expect(early.length).toBeGreaterThanOrEqual(MATCH.chestOfferCount);
-    expect(early.length).toBeLessThan(PLAYABLE_UNIT_TYPES.length);
-    // A summoned helper leaking into a chest would be an unbuyable dead pick.
-    expect(early.every((t) => !UNIT_DEFS[t].summonedOnly)).toBe(true);
+    const common = chestPool('common');
+    expect(common.length).toBeGreaterThanOrEqual(MATCH.chestOfferCount);
+    expect(common.length).toBeLessThan(PLAYABLE_UNIT_TYPES.length);
+    expect(common.every((t) => UNIT_DEFS[t].rarity === 'common')).toBe(true);
+
+    const late = unlockedRarities(MATCH.rarityUnlockSeconds.epic);
+    expect(late).toContain('rare');
+    expect(late).toContain('epic');
   });
 
   it('never offers summoned helpers in chests or the draft', () => {
     expect(PLAYABLE_UNIT_TYPES.some((t) => UNIT_DEFS[t].summonedOnly)).toBe(false);
     expect(STARTER_UNIT_TYPES.some((t) => UNIT_DEFS[t].summonedOnly)).toBe(false);
-    // The full late pool is the playable roster, so nothing is unreachable.
-    expect(chestPool(MATCH.lateUnlockSeconds).length).toBe(PLAYABLE_UNIT_TYPES.length);
+    // Every playable unit is reachable through some rarity, so nothing in the
+    // roster is stranded where a chest can never offer it.
+    const reachable = new Set(RARITIES.flatMap((r) => chestPool(r)));
+    expect(reachable.size).toBe(PLAYABLE_UNIT_TYPES.length);
   });
 });

@@ -34,6 +34,8 @@ export function applyFusions(
   store: EntityStore,
   squad: Entity[],
   out: FusionResult[],
+  /** Ceiling on fusion. Battle Mods can pin this below the roster's own cap. */
+  maxTier: UnitTier = MAX_TIER,
 ): Entity[] {
   let working = squad.filter((u) => u.alive);
   let fusedSomething = true;
@@ -44,7 +46,7 @@ export function applyFusions(
     // Group by type+tier. Only groups at or over the threshold can fuse.
     const groups = new Map<string, Entity[]>();
     for (const unit of working) {
-      if (!unit.unitType || unit.tier >= MAX_TIER) continue;
+      if (!unit.unitType || unit.tier >= maxTier) continue;
       const key = `${unit.unitType}:${unit.tier}`;
       let list = groups.get(key);
       if (!list) {

@@ -24,6 +24,8 @@ import {
   type PlayerWire,
   type GameModeId,
   DEFAULT_MODE,
+  type BattleModId,
+  DEFAULT_BATTLE_MOD,
   type ServerMessage,
   type SnapshotMsg,
   type UnitType,
@@ -89,6 +91,8 @@ export class Connection {
   players: PlayerWire[] = [];
   /** Mode for the current match; the host draws it and tells us. */
   mode: GameModeId = DEFAULT_MODE;
+  /** The twist rolled for this match. */
+  battleMod: BattleModId = DEFAULT_BATTLE_MOD;
   phase = 'lobby';
   timeRemaining = 0;
   assignments = new Map<number, number>();
@@ -185,6 +189,7 @@ export class Connection {
         this.buffer.length = 0;
         this.predicted.valid = false;
         this.mode = msg.mode;
+        this.battleMod = msg.battleMod;
         this.listener.onStart?.(msg.assignments, msg.mode);
         break;
 

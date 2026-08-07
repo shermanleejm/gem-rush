@@ -7,10 +7,13 @@
  */
 
 import { COIN_YIELD, GEM_YIELD, MATCH } from '../config/match.ts';
+import type { BattleMod } from '../config/battleMods.ts';
 import { MAP, zoneAt } from '../config/map.ts';
 import {
-  PLAYABLE_UNIT_TYPES,
+  RARITIES,
   UNIT_DEFS,
+  unitsOfRarity,
+  type Rarity,
   unitMaxHp,
   type UnitTier,
   type UnitType,
@@ -189,27 +192,20 @@ export function spawnFarmable(
   return e;
 }
 
-export function spawnChest(store: EntityStore, x: number, y: number): Entity {
+export function spawnChest(
+  store: EntityStore,
+  x: number,
+  y: number,
+  rarity: Rarity = 'common',
+): Entity {
   const e = store.spawn('chest');
+  e.rarity = rarity;
   e.x = x;
   e.y = y;
   e.team = TEAM_NEUTRAL;
   e.radius = 0.5;
   e.maxHp = 1;
   e.hp = 1;
-  return e;
-}
-
-/** A rescue collectible for Hatchling Run: walk over it to bank it. */
-export function spawnHatchling(store: EntityStore, x: number, y: number): Entity {
-  const e = store.spawn('hatchling');
-  e.x = x;
-  e.y = y;
-  e.team = TEAM_NEUTRAL;
-  e.radius = 0.3;
-  e.maxHp = 1;
-  e.hp = 1;
-  e.value = 1;
   return e;
 }
 
@@ -349,22 +345,127 @@ export function populateArena(
   for (let i = 0; i < MAP.chestSpawns; i++) {
     const spot = centreBiasedSpot(tiles, rng, size, 2.0, store, 0.85);
     chestSpots.push(spot);
-    spawnChest(store, spot.x, spot.y);
+    spawnChest(store, spot.x, spot.y, 'common');
   }
 
   return { camps, chestSpots };
 }
 
+/** Which rarities can appear at this point in the match. */
+export function unlockedRarities(elapsedSeconds: number): Rarity[] {
+  return RARITIES.filter((r) => elapsedSeconds >= MATCH.rarityUnlockSeconds[r]);
+}
+
 /**
- * Chest offer pool, gated by match time (§1.5).
+ * Pick the rarity a freshly-placed chest deals from.
+ *
+ * Weighted rather than uniform, and weighted toward Common, so the cheap
+ * rebuild stays available all match instead of the map filling with Epics
+ * nobody can afford after the last unlock.
+ */
+export function rollChestRarity(rng: Rng, elapsedSeconds: number): Rarity {
+  const open = unlockedRarities(elapsedSeconds);
+  let total = 0;
+  for (const r of open) total += MATCH.rarityWeight[r];
+  let roll = rng.float() * total;
+  for (const r of open) {
+    roll -= MATCH.rarityWeight[r];
+    if (roll <= 0) return r;
+  }
+  return open[open.length - 1] ?? 'common';
+}
+
+/**
+ * What a chest of this rarity can offer.
  *
  * Summoned helpers are excluded by construction — `PLAYABLE_UNIT_TYPES` filters
  * them — so a chest can never offer a Skeleton, which would be a dead pick and
  * would let a player bypass the Summoner that is supposed to earn it.
  */
-export function chestPool(elapsedSeconds: number): UnitType[] {
-  if (elapsedSeconds < MATCH.lateUnlockSeconds) {
-    return PLAYABLE_UNIT_TYPES.filter((t) => UNIT_DEFS[t].earlyPool);
+export function chestPool(rarity: Rarity): UnitType[] {
+  const pool = unitsOfRarity(rarity);
+  // Never hand back an empty pool: a chest with nothing to offer would consume
+  // the player's walk-up and silently do nothing.
+  return pool.length > 0 ? pool : unitsOfRarity('common');
+}
+
+/**
+ * Extra population a Battle Mod asks for, laid down after the normal arena.
+ *
+ * Kept here rather than in `World` so all placement rules — clearance from
+ * rock, centre bias, not landing on top of something else — stay in one file.
+ */
+export function applyBattleModTerrain(
+  store: EntityStore,
+  tiles: Uint8Array,
+  rng: Rng,
+  mod: BattleMod,
+): void {
+  const size = MAP.size;
+
+  for (let i = 0; i < mod.extraProps; i++) {
+    const spot = centreBiasedSpot(tiles, rng, size, 0.7, store, 0.6);
+    spawnProp(store, spot.x, spot.y);
   }
-  return PLAYABLE_UNIT_TYPES.slice();
+  for (let i = 0; i < mod.extraTrees; i++) {
+    const spot = centreBiasedSpot(tiles, rng, size, 1.2, store, 1.1);
+    spawnFarmable(store, 'tree', spot.x, spot.y);
+  }
+  for (let i = 0; i < mod.extraCentreNodes; i++) {
+    // Deliberately jammed into the middle: the point of a richer mine is that
+    // it is somewhere you have to contest, not more ore on your own doorstep.
+    const spot = centreSpot(tiles, rng, size, store);
+    spawnNode(store, spot.x, spot.y);
+  }
+  for (let i = 0; i < mod.giants; i++) {
+    const spot = centreBiasedSpot(tiles, rng, size, 3.0, store, 1.6);
+    spawnGiant(store, spot.x, spot.y);
+  }
+  for (let i = 0; i < mod.lootGoblins; i++) {
+    const spot = centreBiasedSpot(tiles, rng, size, 1.5, store, 0.9);
+    spawnLootGoblin(store, spot.x, spot.y);
+  }
+}
+
+/** A spot inside the contested centre ring. */
+function centreSpot(
+  tiles: Uint8Array,
+  rng: Rng,
+  size: number,
+  store: EntityStore,
+): { x: number; y: number } {
+  for (let attempt = 0; attempt < 200; attempt++) {
+    const spot = findOpenTile(tiles, rng, size, 40);
+    if (zoneAt(spot.x, spot.y) > 1) continue;
+    if (!hasClearance(tiles, spot.x, spot.y, 0.85, size)) continue;
+    if (isOccupied(store, spot.x, spot.y, 1.3)) continue;
+    return spot;
+  }
+  return centreBiasedSpot(tiles, rng, size, 1.3, store, 0.85);
+}
+
+/**
+ * A lone, very tough monster worth a large payout.
+ * Not part of a camp, so clearing it pays no camp bonus — the value is all in
+ * the kill itself.
+ */
+export function spawnGiant(store: EntityStore, x: number, y: number): Entity {
+  const e = spawnCreep(store, x, y, -1, 1);
+  e.maxHp = CREEP_HP * 9;
+  e.hp = e.maxHp;
+  e.radius = 0.7;
+  e.value = GEM_YIELD.creep * 14;
+  e.coinValue = COIN_YIELD.creep * 8;
+  return e;
+}
+
+/** A fragile monster stuffed with coins. Worth chasing, easy to kill. */
+export function spawnLootGoblin(store: EntityStore, x: number, y: number): Entity {
+  const e = spawnCreep(store, x, y, -1, 1);
+  e.maxHp = CREEP_HP * 0.5;
+  e.hp = e.maxHp;
+  e.radius = 0.26;
+  e.value = GEM_YIELD.creep;
+  e.coinValue = COIN_YIELD.creep * 10;
+  return e;
 }

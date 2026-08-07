@@ -9,7 +9,7 @@
  * targeting simple: combat scans one list and filters by kind.
  */
 
-import type { UnitTier, UnitType } from '../config/units.ts';
+import type { Rarity, UnitTier, UnitType } from '../config/units.ts';
 
 export type EntityId = number;
 
@@ -24,7 +24,6 @@ export const ENTITY_KINDS = [
   'chest',
   'gem',
   'coin',
-  'hatchling',
 ] as const;
 export type EntityKind = (typeof ENTITY_KINDS)[number];
 
@@ -103,6 +102,11 @@ export interface Entity {
 
   /** Creep camp grouping, so clearing a camp can pay a bonus. */
   campId: number;
+
+  /**
+   * Which rarity a chest deals from, and prices at. Null for everything else.
+   */
+  rarity: Rarity | null;
 }
 
 function blankEntity(id: EntityId): Entity {
@@ -138,6 +142,7 @@ function blankEntity(id: EntityId): Entity {
     respawnIn: 0,
     pickupDelay: 0,
     campId: -1,
+    rarity: null,
   };
 }
 

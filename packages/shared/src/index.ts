@@ -6,6 +6,7 @@ export * from './math/vec2.ts';
 export * from './config/units.ts';
 export * from './config/match.ts';
 export * from './config/modes.ts';
+export * from './config/battleMods.ts';
 export * from './config/map.ts';
 export * from './config/maps.ts';
 

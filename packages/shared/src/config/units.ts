@@ -42,6 +42,27 @@ export const UNIT_CLASSES = [
 
 export type UnitClass = (typeof UNIT_CLASSES)[number];
 
+/**
+ * How hard a unit is to pull from a chest.
+ *
+ * Rarity does two jobs. It gates *when* a unit can appear — chests only offer
+ * Commons for the opening stretch, then Rares, then Epics — and it sets what a
+ * chest costs, so an Epic pull is a real investment rather than the same price
+ * as a Goblin.
+ *
+ * The opening Common-only window is the load-bearing part: it means an economy
+ * opening (farm crates, fell trees, bank coins) stays viable, because nobody
+ * can rush an Epic on minute one and simply out-stat you.
+ */
+export const RARITIES = ['common', 'rare', 'epic'] as const;
+export type Rarity = (typeof RARITIES)[number];
+
+export const RARITY_LABELS: Record<Rarity, string> = {
+  common: 'Common',
+  rare: 'Rare',
+  epic: 'Epic',
+};
+
 /** Farmable resources, each worked by exactly one specialist. */
 export const HARVEST_KINDS = ['tree', 'field'] as const;
 export type HarvestKind = (typeof HARVEST_KINDS)[number];
@@ -178,8 +199,7 @@ export interface UnitDef {
   formationRank: number;
   /** Team-independent accent colour, used for the HUD swatch and sprite tint. */
   color: number;
-  /** Offered in chests from match start, rather than after the unlock time. */
-  earlyPool: boolean;
+  rarity: Rarity;
   /** Offered in the opening character draft (§ start-of-match pick of three). */
   starter: boolean;
   /** Summoned helpers are never offered anywhere. */
@@ -221,7 +241,7 @@ const CLASS_BASE: Record<UnitClass, Omit<UnitDef, 'type' | 'label' | 'role' | 'c
     summonInterval: 0,
     summonCap: 0,
     formationRank: 40,
-    earlyPool: true,
+    rarity: 'common',
     starter: true,
     summonedOnly: false,
   },
@@ -251,7 +271,7 @@ const CLASS_BASE: Record<UnitClass, Omit<UnitDef, 'type' | 'label' | 'role' | 'c
     summonInterval: 0,
     summonCap: 0,
     formationRank: 80,
-    earlyPool: true,
+    rarity: 'common',
     starter: true,
     summonedOnly: false,
   },
@@ -282,7 +302,7 @@ const CLASS_BASE: Record<UnitClass, Omit<UnitDef, 'type' | 'label' | 'role' | 'c
     summonInterval: 0,
     summonCap: 0,
     formationRank: 95,
-    earlyPool: false,
+    rarity: 'common',
     starter: false,
     summonedOnly: false,
   },
@@ -312,7 +332,7 @@ const CLASS_BASE: Record<UnitClass, Omit<UnitDef, 'type' | 'label' | 'role' | 'c
     summonInterval: 0,
     summonCap: 0,
     formationRank: 90,
-    earlyPool: false,
+    rarity: 'common',
     starter: false,
     summonedOnly: false,
   },
@@ -342,7 +362,7 @@ const CLASS_BASE: Record<UnitClass, Omit<UnitDef, 'type' | 'label' | 'role' | 'c
     summonInterval: 0,
     summonCap: 0,
     formationRank: 50,
-    earlyPool: false,
+    rarity: 'common',
     starter: false,
     summonedOnly: false,
   },
@@ -372,7 +392,7 @@ const CLASS_BASE: Record<UnitClass, Omit<UnitDef, 'type' | 'label' | 'role' | 'c
     summonInterval: 9,
     summonCap: 1,
     formationRank: 85,
-    earlyPool: false,
+    rarity: 'common',
     starter: false,
     summonedOnly: false,
   },
@@ -402,7 +422,7 @@ const CLASS_BASE: Record<UnitClass, Omit<UnitDef, 'type' | 'label' | 'role' | 'c
     summonInterval: 0,
     summonCap: 0,
     formationRank: 45,
-    earlyPool: false,
+    rarity: 'common',
     starter: false,
     summonedOnly: false,
   },
@@ -430,7 +450,14 @@ export const UNIT_DEFS: Record<UnitType, UnitDef> = {
     0xff7043,
     // Slow swing, wide splash: the anti-clump fighter. The long interval is the
     // balance lever — burst that lands every 1.6s is dodgeable by moving.
-    { damage: 30, attackInterval: 1.6, attackRange: 3.2, splashRadius: 1.5, formationRank: 65 },
+    {
+      damage: 30,
+      attackInterval: 1.6,
+      attackRange: 3.2,
+      splashRadius: 1.5,
+      formationRank: 65,
+      rarity: 'rare',
+    },
   ),
   gunner: def(
     'gunner',
@@ -455,12 +482,14 @@ export const UNIT_DEFS: Record<UnitType, UnitDef> = {
     attackRange: 2.2,
     damage: 18,
     formationRank: 55,
+    rarity: 'common',
   }),
   rifleman: def('rifleman', 'Rifleman', 'fighter', 'Steady ranged damage', 0xc9ada7, {
     hp: 90,
     damage: 20,
     attackRange: 4.4,
     formationRank: 75,
+    rarity: 'common',
   }),
   golem: def('golem', 'Golem', 'fighter', 'Slow, very tanky, stuns on impact', 0x7d8491, {
     hp: 330,
@@ -471,6 +500,7 @@ export const UNIT_DEFS: Record<UnitType, UnitDef> = {
     splashRadius: 1.3,
     stunDuration: 0.6,
     formationRank: 10,
+    rarity: 'epic',
   }),
   grappler: def('grappler', 'Grappler', 'fighter', 'Tanky slam, heals off its hits', 0xef476f, {
     hp: 300,
@@ -482,39 +512,45 @@ export const UNIT_DEFS: Record<UnitType, UnitDef> = {
     stunDuration: 0.45,
     lifesteal: 0.35,
     formationRank: 15,
+    rarity: 'common',
   }),
 
   // ── Hotshots ──────────────────────────────────────────────────────────────
   deadeye: def('deadeye', 'Deadeye', 'hotshot', 'Burst single-target damage', 0xf5c518, {
     damage: 15,
     attackInterval: 0.5,
+    rarity: 'rare',
   }),
   chassis: def('chassis', 'Chassis', 'hotshot', 'Sustained robotic fire', 0xe8a0bf, {
     hp: 75,
     damage: 22,
     attackInterval: 0.85,
+    rarity: 'rare',
   }),
   pyromancer: def('pyromancer', 'Pyromancer', 'hotshot', 'Ranged fire, small splash', 0x3f8efc, {
     damage: 28,
     attackInterval: 1.3,
     splashRadius: 1.0,
+    rarity: 'epic',
   }),
   cryomancer: def('cryomancer', 'Cryomancer', 'hotshot', 'Ranged frost, chills enemies', 0x8ecae6, {
     damage: 16,
     attackInterval: 1.1,
     slowFactor: 0.4,
     slowDuration: 1.8,
+    rarity: 'epic',
   }),
   archer: def('archer', 'Archer', 'hotshot', 'Steady backline damage', 0x52b788, {
     damage: 18,
     attackInterval: 0.75,
     attackRange: 5.5,
+    rarity: 'rare',
   }),
 
   // ── Suppliers ─────────────────────────────────────────────────────────────
   pilferer: def('pilferer', 'Pilferer', 'supplier', 'Boosts gem income', 0x80b918, {
     speed: 1.08,
-    earlyPool: true,
+    rarity: 'common',
   }),
   farmhand: def('farmhand', 'Farmhand', 'supplier', 'Fells trees for a big haul', 0xd4a373, {
     gemBonus: 0.32,
@@ -522,10 +558,12 @@ export const UNIT_DEFS: Record<UnitType, UnitDef> = {
     // Needs to actually chop, so unlike other Suppliers it can hit things.
     damage: 16,
     attackInterval: 1.0,
+    rarity: 'common',
   }),
   colonel: def('colonel', 'Colonel', 'supplier', 'Strong gem income', 0x606c38, {
     gemBonus: 0.42,
     hp: 100,
+    rarity: 'epic',
   }),
   wisp: def('wisp', 'Wisp', 'supplier', 'Harvests carrot fields', 0x9d4edd, {
     gemBonus: 0.28,
@@ -533,6 +571,7 @@ export const UNIT_DEFS: Record<UnitType, UnitDef> = {
     harvests: 'field',
     damage: 14,
     attackInterval: 1.0,
+    rarity: 'epic',
   }),
   buccaneer: def('buccaneer', 'Buccaneer', 'supplier', 'Makes chests cheaper', 0xffb703, {
     // The design's "chance of bonus chest keys" has no analogue here — there are
@@ -541,10 +580,12 @@ export const UNIT_DEFS: Record<UnitType, UnitDef> = {
     gemBonus: 0.15,
     chestDiscount: 1.2,
     damage: 10,
+    rarity: 'epic',
   }),
   trader: def('trader', 'Trader', 'supplier', 'Top-tier gem income', 0xfca311, {
     gemBonus: 0.55,
     hp: 95,
+    rarity: 'rare',
   }),
 
   // ── Healers ───────────────────────────────────────────────────────────────
@@ -555,23 +596,27 @@ export const UNIT_DEFS: Record<UnitType, UnitDef> = {
     attackInterval: 1.4,
     splashRadius: 1.2,
     healPerSecond: 12,
+    rarity: 'common',
   }),
   bannerman: def('bannerman', 'Bannerman', 'healer', 'Group heal over time', 0xc1121f, {
     hp: 130,
     healPerSecond: 11,
     attackRange: 5.0,
     formationRank: 35,
+    rarity: 'epic',
   }),
   tinker: def('tinker', 'Tinker', 'healer', 'Passive area heal, fields a drone', 0x00b4d8, {
     healPerSecond: 10,
     summonType: 'drone',
     summonInterval: 14,
     summonCap: 1,
+    rarity: 'rare',
   }),
   minstrel: def('minstrel', 'Minstrel', 'healer', 'Burst area heal', 0xf72585, {
     healPerSecond: 19,
     attackInterval: 2.2,
     attackRange: 4.6,
+    rarity: 'rare',
   }),
 
   // ── Speedsters ────────────────────────────────────────────────────────────
@@ -579,7 +624,7 @@ export const UNIT_DEFS: Record<UnitType, UnitDef> = {
     damage: 3,
     speedAura: 0.07,
     hp: 60,
-    earlyPool: true,
+    rarity: 'common',
   }),
   boarrider: def('boarrider', 'Boar Rider', 'speedster', 'Fast and hits hard', 0x9c6644, {
     hp: 150,
@@ -588,14 +633,17 @@ export const UNIT_DEFS: Record<UnitType, UnitDef> = {
     speedAura: 0.04,
     radius: 0.3,
     formationRank: 25,
+    rarity: 'rare',
   }),
   sprinter: def('sprinter', 'Sprinter', 'speedster', 'Strong squad speed buff', 0x48cae4, {
     speedAura: 0.08,
+    rarity: 'rare',
   }),
   chameleon: def('chameleon', 'Chameleon', 'speedster', 'Fast flanker', 0x2d6a4f, {
     speed: 1.3,
     damage: 17,
     speedAura: 0.03,
+    rarity: 'epic',
   }),
 
   // ── Summoners ─────────────────────────────────────────────────────────────
@@ -603,11 +651,13 @@ export const UNIT_DEFS: Record<UnitType, UnitDef> = {
     summonType: 'turret',
     summonInterval: 11,
     summonCap: 1,
+    rarity: 'epic',
   }),
   necromancer: def('necromancer', 'Necromancer', 'summoner', 'Raises skeletons to soak hits', 0x7b2cbf, {
     summonType: 'skeleton',
     summonInterval: 5,
     summonCap: 3,
+    rarity: 'epic',
   }),
   beekeeper: def('beekeeper', 'Beekeeper', 'summoner', 'Damage ramps on a held target', 0xffca3a, {
     // No summon: the design's Bea is filed as a Summoner but her actual kit is
@@ -618,16 +668,19 @@ export const UNIT_DEFS: Record<UnitType, UnitDef> = {
     rampMax: 2.6,
     summonInterval: 0,
     summonCap: 0,
+    rarity: 'epic',
   }),
   professor: def('professor', 'Professor', 'summoner', 'Fields a hovering companion', 0xadb5bd, {
     summonType: 'drone',
     summonInterval: 10,
     summonCap: 2,
+    rarity: 'epic',
   }),
   beastmaster: def('beastmaster', 'Beastmaster', 'summoner', 'Summons a bear that tanks', 0x774936, {
     summonType: 'bear',
     summonInterval: 16,
     summonCap: 1,
+    rarity: 'epic',
   }),
   pilot: def('pilot', 'Pilot', 'summoner', 'Deploys a heavy walker', 0x3a5a40, {
     // The design's Tank hijacks vehicles that spawn on the map. There are none,
@@ -637,12 +690,14 @@ export const UNIT_DEFS: Record<UnitType, UnitDef> = {
     summonInterval: 20,
     summonCap: 1,
     damage: 14,
+    rarity: 'epic',
   }),
   aviator: def('aviator', 'Aviator', 'summoner', 'Support companion, quick on its feet', 0xf4a261, {
     summonType: 'drone',
     summonInterval: 12,
     summonCap: 1,
     speed: 1.12,
+    rarity: 'rare',
   }),
 
   // ── All-rounders ──────────────────────────────────────────────────────────
@@ -651,6 +706,7 @@ export const UNIT_DEFS: Record<UnitType, UnitDef> = {
     damage: 24,
     attackInterval: 0.8,
     speed: 1.18,
+    rarity: 'rare',
   }),
   titan: def('titan', 'Titan', 'allrounder', 'Durable, well-rounded melee', 0x1d3557, {
     hp: 200,
@@ -658,6 +714,7 @@ export const UNIT_DEFS: Record<UnitType, UnitDef> = {
     radius: 0.36,
     speed: 0.92,
     formationRank: 20,
+    rarity: 'epic',
   }),
   digger: def('digger', 'Digger', 'allrounder', 'Slippery melee, hard to pin', 0xbc6c25, {
     // "Burrows to become untargetable" needs a targeting exception the sim does
@@ -667,11 +724,13 @@ export const UNIT_DEFS: Record<UnitType, UnitDef> = {
     damage: 20,
     speed: 1.2,
     radius: 0.24,
+    rarity: 'epic',
   }),
   bruiser: def('bruiser', 'Bruiser', 'allrounder', 'Straightforward melee brawler', 0xd00000, {
     hp: 165,
     damage: 26,
     attackInterval: 1.1,
+    rarity: 'epic',
   }),
 
   // ── Mixed ─────────────────────────────────────────────────────────────────
@@ -689,6 +748,7 @@ export const UNIT_DEFS: Record<UnitType, UnitDef> = {
       splashRadius: 1.2,
       knockback: 1.1,
       formationRank: 30,
+      rarity: 'epic',
     },
   ),
 
@@ -701,7 +761,7 @@ export const UNIT_DEFS: Record<UnitType, UnitDef> = {
     // Stationary in spirit: it keeps up only barely, so it trails the squad.
     speed: 0.55,
     formationRank: 98,
-    earlyPool: false,
+    rarity: 'common',
     starter: false,
     summonedOnly: true,
   }),
@@ -711,7 +771,7 @@ export const UNIT_DEFS: Record<UnitType, UnitDef> = {
     speed: 1.1,
     radius: 0.2,
     formationRank: 5,
-    earlyPool: false,
+    rarity: 'common',
     starter: false,
     summonedOnly: true,
   }),
@@ -721,7 +781,7 @@ export const UNIT_DEFS: Record<UnitType, UnitDef> = {
     attackInterval: 1.2,
     radius: 0.36,
     formationRank: 18,
-    earlyPool: false,
+    rarity: 'common',
     starter: false,
     summonedOnly: true,
   }),
@@ -731,7 +791,7 @@ export const UNIT_DEFS: Record<UnitType, UnitDef> = {
     speed: 1.15,
     radius: 0.18,
     formationRank: 92,
-    earlyPool: false,
+    rarity: 'common',
     starter: false,
     summonedOnly: true,
   }),
@@ -742,10 +802,21 @@ export const PLAYABLE_UNIT_TYPES: readonly UnitType[] = UNIT_TYPES.filter(
   (t) => !UNIT_DEFS[t].summonedOnly,
 );
 
-/** The pool the opening character draft picks from (§ pick one of three). */
+/**
+ * The pool the opening character draft picks from.
+ *
+ * Commons only. Chests are Common-only for the opening stretch, so handing
+ * somebody an Epic before the match has started would hand them a stat lead
+ * nobody else can answer for two minutes.
+ */
 export const STARTER_UNIT_TYPES: readonly UnitType[] = UNIT_TYPES.filter(
-  (t) => UNIT_DEFS[t].starter,
+  (t) => UNIT_DEFS[t].starter && UNIT_DEFS[t].rarity === 'common',
 );
+
+/** Playable units of a given rarity. */
+export function unitsOfRarity(rarity: Rarity): UnitType[] {
+  return PLAYABLE_UNIT_TYPES.filter((t) => UNIT_DEFS[t].rarity === rarity);
+}
 
 /** Per-tier multipliers (§1.4: fused ~2.6x HP, ~2.4x damage). */
 export const TIER_HP_MULT: readonly number[] = [1, 2.6, 2.6 * 2.6];
