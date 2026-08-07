@@ -147,9 +147,16 @@ export type WorldEvent =
   | { t: 'summon'; x: number; y: number; player: PlayerId; unit: UnitType }
   | { t: 'squadFight'; x: number; y: number; winner: PlayerId; loser: PlayerId; dropped: number }
   | { t: 'eliminated'; player: PlayerId }
+  | { t: 'rebuilt'; player: PlayerId }
   | { t: 'draftOffer'; player: PlayerId; options: UnitType[] }
   | { t: 'draftPick'; player: PlayerId; unit: UnitType }
   | { t: 'phase'; phase: Phase };
+
+/** How close a leader must be before loose pickups start flying to it. */
+const MAGNET_RADIUS = 3.6;
+/** Pull speed at the edge of the magnet field, and right on top of it. */
+const MAGNET_MIN_SPEED = 2.5;
+const MAGNET_MAX_SPEED = 15;
 
 /** How far a unit will notice an enemy and step out to meet it. */
 const ENGAGE_RADIUS = 6;
@@ -380,7 +387,12 @@ export class World {
 
     for (const player of this.players.values()) {
       if (!player.starterType) this.chooseStarter(player, 0);
+      // Record the resolved type rather than only spawning it. A caller that
+      // skips the draft entirely (tests, a rematch shortcut) left this null,
+      // and anything downstream that rebuilds around "your character" then had
+      // nothing to read.
       const type = player.starterType ?? STARTER_UNIT_TYPES[0]!;
+      player.starterType = type;
       const pad = this.map.homePads[player.index % this.map.homePads.length]!;
       const tier = Math.min(this.battleMod.startingTier, this.battleMod.maxTier) as UnitTier;
       for (let i = 0; i < MATCH.startingUnitCount; i++) {
@@ -707,36 +719,30 @@ export class World {
       e.y = nextY;
     }
 
-    // Both axes blocked but the unit still wants to move: it is jammed in a
-    // corner facing its target, which axis sliding alone can never resolve —
-    // the unit just presses into the rock forever. Try stepping sideways
-    // instead, picking whichever perpendicular gets it closer to where it was
-    // heading. That is enough to walk it around an obstacle without paying for
-    // real pathfinding.
-    const stuck = e.x === startX && e.y === startY;
-    if (stuck && (e.vx !== 0 || e.vy !== 0)) {
+    // One axis blocked, the other free, is already handled above — that is the
+    // ordinary case of sliding along a wall. This handles the narrower one of
+    // being wedged on a corner with both axes blocked: a single sideways step
+    // rounds it off.
+    //
+    // Deliberately no more than that. An earlier attempt escalated through ever
+    // wider angles until something was walkable, which sounds strictly better
+    // and is not: pushing into a dead end is a situation where stopping is the
+    // correct answer, and a search that keeps widening eventually turns the
+    // player around and walks them back out of a pocket they were deliberately
+    // driving into. Sliding round corners is help; steering for them is not.
+    if (e.x === startX && e.y === startY && (e.vx !== 0 || e.vy !== 0)) {
       const speed = Math.hypot(e.vx, e.vy);
       const perpX = -e.vy / speed;
       const perpY = e.vx / speed;
       const step = speed * dt;
-
-      let bestX = e.x;
-      let bestY = e.y;
-      let bestScore = -Infinity;
       for (const sign of [1, -1]) {
         const tx = e.x + perpX * sign * step;
         const ty = e.y + perpY * sign * step;
         if (this.circleHitsWall(tiles, size, tx, ty, r)) continue;
-        // Prefer the side that makes progress along the original heading.
-        const score = (tx - startX) * e.vx + (ty - startY) * e.vy;
-        if (score > bestScore) {
-          bestScore = score;
-          bestX = tx;
-          bestY = ty;
-        }
+        e.x = tx;
+        e.y = ty;
+        break;
       }
-      e.x = bestX;
-      e.y = bestY;
     }
 
     e.x = clamp(e.x, r, size - r);
@@ -1059,6 +1065,82 @@ export class World {
     this.scatterCoins(camp.x, camp.y, Math.round(camp.coinBonus * mult), 1.4);
   }
 
+  /**
+   * Put a busted player back on their pad with a small squad.
+   *
+   * Only ever called inside the opening grace window. Rebuilds around the
+   * character they drafted, because that pick is their identity for the match
+   * and handing them somebody else's unit would quietly undo it.
+   */
+  private rebuild(player: PlayerState): void {
+    const pad = this.map.homePads[player.index % this.map.homePads.length]!;
+    const leader = this.leaderOf(player);
+    if (leader) {
+      leader.x = pad.x;
+      leader.y = pad.y;
+      leader.vx = 0;
+      leader.vy = 0;
+    }
+    const type = player.starterType ?? STARTER_UNIT_TYPES[0]!;
+    for (let i = 0; i < MATCH.rebuildUnitCount; i++) {
+      const unit = spawnUnit(this.store, player.index, type, 0, pad.x, pad.y + 0.5 + i * 0.3);
+      unit.alliance = player.alliance;
+    }
+    this.events.push({ t: 'rebuilt', player: player.id });
+  }
+
+  /**
+   * Loose gems and coins fly to whoever is nearest.
+   *
+   * This is the single biggest thing separating "walk over the pickups" from a
+   * collection loop that feels good. A gem that sits still has to be steered
+   * onto; a gem that leaps toward you the moment you are close rewards getting
+   * *near*, which is a far more forgiving target on a phone and turns clearing
+   * a crate into a little burst of things rushing at you.
+   *
+   * Pull accelerates as it closes, so a pickup snaps in decisively at the end
+   * rather than drifting alongside you. Collection itself is unchanged — this
+   * only moves things into reach, so the existing pickup radii still decide how
+   * much a squad can hoover and the economy balance holds.
+   */
+  private magnetisePickups(dt: number): void {
+    const radiusSq = MAGNET_RADIUS * MAGNET_RADIUS;
+
+    for (const e of this.store.items) {
+      if (!e.alive || e.pickupDelay > 0) continue;
+      if (e.kind !== 'gem' && e.kind !== 'coin') continue;
+
+      // Nearest eligible leader. Pickups stay neutral until collected, so they
+      // are pulled by whoever gets close first — which makes a contested drop
+      // an actual race.
+      let bestX = 0;
+      let bestY = 0;
+      let bestDistSq = radiusSq;
+      let found = false;
+      for (const player of this.players.values()) {
+        if (player.eliminated) continue;
+        const leader = this.leaderOf(player);
+        if (!leader) continue;
+        const dSq = distanceSq(leader.x, leader.y, e.x, e.y);
+        if (dSq >= bestDistSq) continue;
+        bestDistSq = dSq;
+        bestX = leader.x;
+        bestY = leader.y;
+        found = true;
+      }
+      if (!found) continue;
+
+      const dist = Math.sqrt(bestDistSq) || 1e-4;
+      // Ramp from a gentle tug at the rim of the field to a hard snap up close.
+      const closeness = 1 - dist / MAGNET_RADIUS;
+      const speed =
+        MAGNET_MIN_SPEED + (MAGNET_MAX_SPEED - MAGNET_MIN_SPEED) * closeness * closeness;
+      const step = Math.min(dist, speed * dt);
+      e.x += ((bestX - e.x) / dist) * step;
+      e.y += ((bestY - e.y) / dist) * step;
+    }
+  }
+
   private resolvePickups(inputs: Map<PlayerId, InputCommand>, dt: number): void {
     for (const e of this.store.items) {
       // Coins as well as gems. Ticking only gems left every dropped coin
@@ -1066,6 +1148,8 @@ export class World {
       if (!e.alive || e.pickupDelay <= 0) continue;
       if (e.kind === 'gem' || e.kind === 'coin') e.pickupDelay -= dt;
     }
+
+    this.magnetisePickups(dt);
 
     for (const player of this.players.values()) {
       const leader = this.leaderOf(player);
@@ -1254,6 +1338,15 @@ export class World {
       // Losing your squad ends your run, and it does not matter who finished
       // it off — a creep camp counts the same as a rival. Only a rival used to,
       // so you could be wiped by the map and simply carry on.
+      //
+      // Except in the opening minute, where it rebuilds you instead. A bust at
+      // twenty seconds is three and a half minutes of watching, which is a
+      // worse outcome for the player than the rule is worth that early.
+      if (this.elapsed < MATCH.bustGraceSeconds) {
+        this.rebuild(loser);
+        continue;
+      }
+
       loser.eliminated = true;
       this.events.push({ t: 'eliminated', player: loser.id });
 

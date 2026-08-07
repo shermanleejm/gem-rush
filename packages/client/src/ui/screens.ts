@@ -20,6 +20,19 @@ import {
 
 const clamp01 = (n: number): number => Math.max(0, Math.min(1, n));
 
+/**
+ * A one-shot scale kick.
+ *
+ * Restarted by removing and re-adding the class inside a reflow read, because
+ * re-adding a class that is already present does not restart a CSS animation —
+ * and rapid pickups are exactly the case where it needs to.
+ */
+function punch(node: HTMLElement): void {
+  node.classList.remove('punch');
+  void node.offsetWidth;
+  node.classList.add('punch');
+}
+
 function el<K extends keyof HTMLElementTagNameMap>(
   tag: K,
   className?: string,
@@ -147,6 +160,7 @@ export function showModeCard(
  */
 export function createGemTag(): {
   set: (gems: number, screenX: number, screenY: number) => void;
+  punch: () => void;
   hide: () => void;
   destroy: () => void;
 } {
@@ -155,6 +169,9 @@ export function createGemTag(): {
   document.body.appendChild(tag);
   let last = -1;
   return {
+    punch() {
+      punch(tag);
+    },
     set(gems, screenX, screenY) {
       if (gems !== last) {
         tag.textContent = `◆ ${gems}`;
@@ -432,6 +449,10 @@ export interface HudHandle {
   setSquad: (n: number, cap: number) => void;
   setMode: (label: string) => void;
   setCoins: (n: number) => void;
+  /** Progress toward affording the next chest. */
+  setChestGoal: (coins: number, price: number) => void;
+  /** Brief scale kick on the coin counter, so a gain is felt not just shown. */
+  punchCoins: () => void;
   /** 0 = ready, 1 = just used. Drives the dash button's cooldown sweep. */
   setDashCooldown: (fraction: number) => void;
   setScores: (
@@ -463,8 +484,12 @@ export function createHud(onDash: () => void = () => {}): HudHandle {
 
   const topRight = el('div', 'hud-topright');
   const coins = el('div', 'pill coins', '0');
+  const chestGoal = el('div', 'chest-goal');
+  const chestGoalFill = el('div', 'chest-goal-fill');
+  const chestGoalText = el('div', 'chest-goal-text', '');
+  chestGoal.append(chestGoalFill, chestGoalText);
   const squad = el('div', 'pill squad', '0/15');
-  topRight.append(coins, squad);
+  topRight.append(coins, chestGoal, squad);
 
   // Bottom-right: dash. The sweep is a conic gradient over the button rather
   // than a separate ring, so the whole control reads as "recharging".
@@ -501,6 +526,17 @@ export function createHud(onDash: () => void = () => {}): HudHandle {
     },
     setCoins(n) {
       coins.textContent = `● ${n}`;
+    },
+    setChestGoal(have, price) {
+      if (price <= 0) return;
+      const pct = Math.max(0, Math.min(1, have / price));
+      chestGoalFill.style.width = `${(pct * 100).toFixed(1)}%`;
+      chestGoal.classList.toggle('ready', have >= price);
+      const label = have >= price ? 'CHEST READY' : `${Math.max(0, price - have)} to a chest`;
+      if (chestGoalText.textContent !== label) chestGoalText.textContent = label;
+    },
+    punchCoins() {
+      punch(coins);
     },
     setDashCooldown(fraction) {
       const pct = Math.round(clamp01(fraction) * 100);
@@ -799,6 +835,8 @@ export function createMinimap(): MinimapHandle {
 
 export interface BannerHandle {
   show: (big: string, small: string) => void;
+  /** Show for a moment, then clear itself. For events with no lasting state. */
+  flash: (big: string, small: string, seconds?: number) => void;
   hide: () => void;
   destroy: () => void;
 }
@@ -812,11 +850,22 @@ export function createBanner(): BannerHandle {
   root.style.display = 'none';
   document.body.appendChild(root);
 
+  let flashTimer = 0;
   return {
     show(b, s) {
+      window.clearTimeout(flashTimer);
       big.textContent = b;
       small.textContent = s;
       root.style.display = '';
+    },
+    flash(b, s, seconds = 2.2) {
+      window.clearTimeout(flashTimer);
+      big.textContent = b;
+      small.textContent = s;
+      root.style.display = '';
+      flashTimer = window.setTimeout(() => {
+        root.style.display = 'none';
+      }, seconds * 1000);
     },
     hide() {
       root.style.display = 'none';

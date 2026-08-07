@@ -176,11 +176,34 @@ describe('the core loop (§1.3)', () => {
     expect(standings.reduce((n, r) => n + r.gems, 0)).toBeGreaterThan(0);
   });
 
+  it('rebuilds you instead of busting you during the opening grace', () => {
+    // A bust twenty seconds into a four-minute match is three and a half
+    // minutes of watching, which is a worse deal for the player than the rule
+    // is worth that early.
+    const world = new World(556, 2);
+    const player = world.addPlayer(1, 'Early');
+    world.addPlayer(2, 'Rival');
+    world.start();
+    expect(world.elapsed).toBeLessThan(MATCH.bustGraceSeconds);
+
+    for (const u of world.squadOf(player.index)) world.store.despawn(u);
+    world.tick(input(0, 0));
+
+    expect(player.eliminated).toBe(false);
+    expect(world.squadOf(player.index).length).toBe(MATCH.rebuildUnitCount);
+    // And around the character they drafted, not somebody else's.
+    for (const u of world.squadOf(player.index)) {
+      expect(u.unitType).toBe(player.starterType);
+    }
+  });
+
   it('losing your whole squad busts you out of the match (§1.4)', () => {
     const world = new World(555, 2);
     const player = world.addPlayer(1, 'Wiped');
     world.addPlayer(2, 'Rival');
     world.start();
+    // Past the opening grace, where a wipe would rebuild instead.
+    world.elapsed = MATCH.bustGraceSeconds + 1;
 
     for (const u of world.squadOf(player.index)) world.store.despawn(u);
     world.tick(input(0, 0));

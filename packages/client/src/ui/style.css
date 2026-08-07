@@ -771,3 +771,62 @@ button.secondary {
   line-height: 1.45;
   color: var(--ink);
 }
+
+/* A one-shot kick on a counter that just went up. Scale only — moving a pinned
+   element would fight the position updates the gem tag gets every frame. */
+@keyframes punch {
+  0% { transform: translate(-50%, -100%) scale(1); }
+  35% { transform: translate(-50%, -100%) scale(1.28); }
+  100% { transform: translate(-50%, -100%) scale(1); }
+}
+
+.gemtag.punch {
+  animation: punch 220ms ease-out;
+}
+
+/* The coin pill is in normal flow, so it needs its own keyframes without the
+   gem tag's centring transform. */
+@keyframes punch-inline {
+  0% { transform: scale(1); }
+  35% { transform: scale(1.22); }
+  100% { transform: scale(1); }
+}
+
+.pill.coins.punch {
+  animation: punch-inline 220ms ease-out;
+}
+
+/* Progress toward the next chest. There should always be a visible near-term
+   goal — a bare coin total is a number, a number next to a target is a plan. */
+.chest-goal {
+  position: relative;
+  width: 132px;
+  height: 18px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(13, 17, 25, 0.82);
+  border: 1px solid var(--line);
+}
+
+.chest-goal-fill {
+  position: absolute;
+  inset: 0;
+  width: 0%;
+  background: linear-gradient(90deg, #b8801f, #ffc93c);
+  transition: width 140ms ease-out;
+}
+
+.chest-goal-text {
+  position: relative;
+  text-align: center;
+  line-height: 16px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  color: var(--ink);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);
+}
+
+.chest-goal.ready .chest-goal-fill {
+  background: linear-gradient(90deg, #2f9e5e, #5ad46a);
+}

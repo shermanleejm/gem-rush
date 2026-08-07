@@ -122,6 +122,19 @@ export interface MatchConfig {
    * snowballing into a large one come out about even.
    */
   squadGemFalloff: number;
+
+  /**
+   * Opening window in which a wipe rebuilds you instead of ending your run.
+   *
+   * Being busted is meant to be the stake that makes fights matter, but with a
+   * one-unit opening squad it was landing twenty seconds into a four-minute
+   * match — and then there is nothing to do but watch. A short grace means the
+   * first mistake costs you tempo rather than the whole round, and the rule
+   * still bites for the rest of the match where the gems actually are.
+   */
+  bustGraceSeconds: number;
+  /** Units handed back on an early rebuild. */
+  rebuildUnitCount: number;
 }
 
 export const MATCH: MatchConfig = {
@@ -158,7 +171,9 @@ export const MATCH: MatchConfig = {
   reconnectGraceSeconds: 30,
   regenPerSecond: 6,
   regenDelaySeconds: 4,
-  squadGemFalloff: 0.24,
+  squadGemFalloff: 0.13,
+  bustGraceSeconds: 60,
+  rebuildUnitCount: 2,
 };
 
 /**

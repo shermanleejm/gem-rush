@@ -18,7 +18,15 @@ interface Limit {
   last: number;
 }
 
+/** Seconds of silence that ends a pickup streak. */
+const PICKUP_STREAK_GAP = 0.55;
+/** Cap on the rise, so a long run does not climb into a whistle. */
+const PICKUP_STREAK_MAX = 11;
+
 export class Audio {
+  private pickupStreak = 0;
+  private lastPickupAt = -99;
+
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
   private noiseBuffer: AudioBuffer | null = null;
@@ -143,9 +151,20 @@ export class Audio {
         this.noise(0.2, 1400, 0.42);
         this.tone(180, 0.18, 'triangle', 0.25, 70);
         break;
-      case 'pickup':
-        this.tone(880, 0.1, 'sine', 0.35, 1320);
+      case 'pickup': {
+        // Rising pitch on a streak. Collecting a burst of gems should sound
+        // like it is building rather than like the same blip eight times — the
+        // ladder is most of what makes hoovering a pile feel good. It resets
+        // after a short gap, so the reward is for a continuous run.
+        const now = performance.now() / 1000;
+        if (now - this.lastPickupAt > PICKUP_STREAK_GAP) this.pickupStreak = 0;
+        else this.pickupStreak = Math.min(this.pickupStreak + 1, PICKUP_STREAK_MAX);
+        this.lastPickupAt = now;
+
+        const step = Math.pow(2, this.pickupStreak / 12); // one semitone a step
+        this.tone(760 * step, 0.09, 'sine', 0.32, 1180 * step);
         break;
+      }
       case 'fusion':
         // Rising triad — the one moment worth celebrating.
         this.tone(523, 0.14, 'triangle', 0.4);

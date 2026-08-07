@@ -7,14 +7,7 @@
  * for from M1 rather than retrofit.
  */
 
-import {
-  Application,
-  Container,
-  Graphics,
-  Sprite,
-  type Renderer,
-  type Text,
-} from 'pixi.js';
+import { Application, Container, Graphics, Sprite, Text, TextStyle, type Renderer } from 'pixi.js';
 
 import { MAP, TILE_GRASS, TILE_WALL, UNIT_DEFS, type UnitType } from '@gem-rush/shared';
 
@@ -30,6 +23,18 @@ import { buildSpriteAtlas, type SpriteAtlas } from './sprites3d.ts';
  * already covers.
  */
 const BASE_SCALE = 44;
+
+/** Authored large and scaled down, so popups stay sharp at any camera zoom. */
+const POPUP_STYLE = new TextStyle({
+  fontFamily: 'ui-sans-serif, system-ui, sans-serif',
+  fontSize: 64,
+  fontWeight: '900',
+  fill: 0xffffff,
+  stroke: { color: 0x11161f, width: 8 },
+});
+
+/** How long a dropped pickup spends bursting out before it settles. */
+const POP_SECONDS = 0.42;
 
 const TEAM_COLORS = [
   0x4da3ff, 0xff7a59, 0x56d9a3, 0xffc857, 0xb98bff, 0xff6bb5, 0x5ee0e0, 0xa3d94d,
@@ -66,6 +71,10 @@ export class Scene {
   private effectPool: Sprite[] = [];
   private barPool: Graphics[] = [];
   private activeBars: Graphics[] = [];
+  private popups: { t: Text; life: number; max: number }[] = [];
+  private popupPool: Text[] = [];
+  /** Match time each pickup id was first seen, for the pop-in animation. */
+  private seenAt = new Map<number, number>();
 
   private camX = MAP.size / 2;
   private camY = MAP.size / 2;
@@ -256,6 +265,14 @@ export class Scene {
     this.activeLabels.length = 0;
   }
 
+  /** Drop pop-in bookkeeping for pickups that no longer exist. */
+  private pruneSeen(entities: Map<number, ViewEntity>): void {
+    if (this.seenAt.size < 256) return;
+    for (const id of this.seenAt.keys()) {
+      if (!entities.has(id)) this.seenAt.delete(id);
+    }
+  }
+
   /** Draw one frame of interpolated state. */
   render(
     entities: Map<number, ViewEntity>,
@@ -264,6 +281,7 @@ export class Scene {
     dt: number,
   ): void {
     this.releaseAll();
+    this.pruneSeen(entities);
     this.time += dt;
 
     // Camera: follow with a soft lerp, zoom out as the squad grows so a big
@@ -319,6 +337,7 @@ export class Scene {
     for (const e of sorted) this.drawEntity(e, localLeader);
     this.updateEffects(dt);
     this.updateProjectiles(dt);
+    this.updatePopups(dt);
   }
 
   private drawEntity(e: ViewEntity, localLeader: { x: number; y: number } | null): void {
@@ -431,6 +450,27 @@ export class Scene {
     } else if (e.kind === 'gem' || e.kind === 'coin') {
       bob = Math.sin(this.time * 5 + e.id) * 0.09;
       s.rotation = Math.sin(this.time * 2.2 + e.id) * 0.25;
+
+      // Pop-in. The sim drops pickups straight onto the floor at their final
+      // position, which appears as a pile blinking into existence. Giving each
+      // one a brief hop and an overshooting scale as it arrives makes a smashed
+      // crate read as bursting rather than as inventory arriving.
+      let born = this.seenAt.get(e.id);
+      if (born === undefined) {
+        born = this.time;
+        this.seenAt.set(e.id, born);
+      }
+      const age = this.time - born;
+      if (age < POP_SECONDS) {
+        const k = age / POP_SECONDS;
+        // Arc up and back down, with a little spin, so it looks thrown.
+        bob -= Math.sin(k * Math.PI) * 0.85;
+        s.rotation += (1 - k) * 5 * (e.id % 2 === 0 ? 1 : -1);
+        // Overshoot past full size and settle, which reads as impact.
+        const punch = k < 0.7 ? 1.55 * (k / 0.7) : 1.55 - 0.55 * ((k - 0.7) / 0.3);
+        s.width *= punch;
+        s.height *= punch;
+      }
     } else if (e.kind === 'tree') {
       // Trees sway rather than bob — they are rooted.
       s.rotation = Math.sin(this.time * 1.1 + e.id) * 0.05;
@@ -533,6 +573,50 @@ export class Scene {
 
   spawnBurst(x: number, y: number, color: number, count = 6): void {
     for (let i = 0; i < count; i++) this.spawnHit(x, y, color);
+  }
+
+  /**
+   * A number that floats up and fades where something was banked.
+   *
+   * The counter in the corner tells you your total; this tells you *that a
+   * thing just happened, here, worth this much*. Without it a pickup is a digit
+   * quietly changing somewhere you are not looking, which is the difference
+   * between collecting and merely accumulating.
+   */
+  spawnPopup(x: number, y: number, text: string, color: number): void {
+    const t = this.popupPool.pop() ?? new Text({ text, style: POPUP_STYLE.clone() });
+    t.text = text;
+    t.style.fill = color;
+    t.anchor.set(0.5, 1);
+    // Text is authored at 64px and scaled down, so it stays crisp when the
+    // camera zooms rather than being re-rasterised every frame.
+    t.scale.set(0.012);
+    t.x = x;
+    t.y = y;
+    t.alpha = 1;
+    t.visible = true;
+    this.effectLayer.addChild(t);
+    this.popups.push({ t, life: 0.85, max: 0.85 });
+  }
+
+  private updatePopups(dt: number): void {
+    for (let i = this.popups.length - 1; i >= 0; i--) {
+      const p = this.popups[i]!;
+      p.life -= dt;
+      if (p.life <= 0) {
+        p.t.visible = false;
+        if (p.t.parent) p.t.parent.removeChild(p.t);
+        this.popupPool.push(p.t);
+        this.popups.splice(i, 1);
+        continue;
+      }
+      const k = 1 - p.life / p.max;
+      // Rises fast then eases, and only fades over the back half — a popup that
+      // starts fading immediately is hard to read.
+      p.t.y -= (1.9 - k * 1.2) * dt;
+      p.t.alpha = k < 0.5 ? 1 : 1 - (k - 0.5) * 2;
+      p.t.scale.set(0.012 * (1 + Math.max(0, 0.35 - k) * 1.2));
+    }
   }
 
   /**

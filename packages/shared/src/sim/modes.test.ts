@@ -21,6 +21,8 @@ import {
 import { Rng } from '../math/rng.ts';
 import { squadAuras } from './auras.ts';
 import { rollChestRarity, spawnProp, spawnUnit, unlockedRarities } from './spawning.ts';
+import { isWallAt, tileIndex } from './mapgen.ts';
+import { TILE_FLOOR, TILE_WALL } from '../config/map.ts';
 import { World, squadGemScale, type InputCommand } from './world.ts';
 
 const idle = (ids: number[]): Map<number, InputCommand> =>
@@ -181,6 +183,7 @@ describe('the match', () => {
     const w = new World(32, 3);
     const players = [1, 2, 3].map((i) => w.addPlayer(i, `P${i}`));
     w.start();
+    w.elapsed = MATCH.bustGraceSeconds + 1;
 
     for (const p of players.slice(0, 2)) {
       for (const u of w.squadOf(p.index)) w.store.despawn(u);
@@ -440,5 +443,62 @@ describe('squad-size gem falloff', () => {
       return total;
     };
     expect(banked(10)).toBeLessThan(banked(0));
+  });
+});
+
+describe('moving around geometry', () => {
+  it('slides along a wall instead of stopping dead on a diagonal', () => {
+    const w = new World(6001, 1);
+    const p = w.addPlayer(1, 'Slider');
+    w.start();
+
+    const size = w.map.size;
+    const cx = 20;
+    const cy = 20;
+    for (let y = cy - 4; y <= cy + 4; y++) {
+      for (let x = cx - 4; x <= cx + 4; x++) w.map.tiles[tileIndex(x, y, size)] = TILE_FLOOR;
+    }
+    // A wall directly below, open to the right.
+    for (let d = -3; d <= 3; d++) w.map.tiles[tileIndex(cx + d, cy + 1, size)] = TILE_WALL;
+
+    const leader = w.leaderOf(p)!;
+    leader.x = cx + 0.5;
+    leader.y = cy + 0.5;
+    const startX = leader.x;
+
+    // Pushing down-right into the wall must still carry it right.
+    const downRight = new Map([[1, { seq: 1, dirX: 1, dirY: 1 }]]);
+    for (let i = 0; i < 40; i++) w.tick(downRight);
+
+    expect(leader.x - startX, 'did not slide along the wall').toBeGreaterThan(1);
+    expect(isWallAt(w.map.tiles, leader.x, leader.y, size)).toBe(false);
+  });
+
+  it('ejects anything that ends up inside rock', () => {
+    // Squad separation can shove a unit into geometry; once its centre is in
+    // rock every axis test fails and it would stay there for the whole match.
+    const w = new World(6002, 1);
+    const p = w.addPlayer(1, 'Buried');
+    w.start();
+
+    const size = w.map.size;
+    const cx = 24;
+    const cy = 24;
+    for (let y = cy - 2; y <= cy + 2; y++) {
+      for (let x = cx - 2; x <= cx + 2; x++) w.map.tiles[tileIndex(x, y, size)] = TILE_FLOOR;
+    }
+    w.map.tiles[tileIndex(cx, cy, size)] = TILE_WALL;
+
+    for (const u of w.squadOf(p.index)) w.store.despawn(u);
+    const unit = spawnUnit(w.store, p.index, 'brute', 0, cx + 0.5, cy + 0.5);
+    unit.alliance = p.alliance;
+    expect(isWallAt(w.map.tiles, unit.x, unit.y, size)).toBe(true);
+
+    const leader = w.leaderOf(p)!;
+    leader.x = cx + 3;
+    leader.y = cy;
+    for (let i = 0; i < 20; i++) w.tick(idle([1]));
+
+    expect(isWallAt(w.map.tiles, unit.x, unit.y, size), 'unit stayed buried').toBe(false);
   });
 });

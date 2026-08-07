@@ -234,11 +234,19 @@ function handleEvents(events: WorldEvent[]): void {
         audio.play('death');
         break;
       case 'gem':
-        // Only our own pickups make a sound; eight players hoovering gems would
-        // otherwise be a constant chime.
+        // Only our own pickups make a sound or throw a number; eight players
+        // hoovering at once would be a constant chime and a wall of text.
         if (ev.player === conn.playerId) {
           scene.spawnBurst(ev.x, ev.y, 0x56d9a3, 4);
+          scene.spawnPopup(ev.x, ev.y - 0.4, `+${ev.value}`, 0x7dffc0);
           audio.play('pickup');
+          gemTag?.punch();
+        }
+        break;
+      case 'coin':
+        if (ev.player === conn.playerId) {
+          scene.spawnBurst(ev.x, ev.y, 0xffc93c, 3);
+          hud?.punchCoins();
         }
         break;
       case 'fusion':
@@ -274,6 +282,14 @@ function handleEvents(events: WorldEvent[]): void {
         break;
       case 'eliminated':
         if (ev.player === conn.playerId) audio.play('wipe');
+        break;
+      case 'rebuilt':
+        // Early wipes rebuild rather than end the run; say so, or the player
+        // sees their squad vanish and assumes the worst.
+        if (ev.player === conn.playerId) {
+          audio.play('wipe');
+          banner.flash('Squad wiped', 'Rebuilt at your home pad — early grace.');
+        }
         break;
 
       case 'draftOffer':
@@ -377,6 +393,9 @@ function frame(now: number): void {
 
       hud.setTimer(conn.timeRemaining, conn.phase === 'lastCall');
       hud.setCoins(me?.c ?? 0);
+      // Always show the next thing to save for. A bare coin count is a number;
+      // a number next to a target is a goal you are partway to.
+      hud.setChestGoal(me?.c ?? 0, me?.p ?? 0);
       hud.setSquad(squadSize, conn.config.squadCap);
       hud.setMode(mode.label);
       hud.setDashCooldown(me?.dc ?? 0);
