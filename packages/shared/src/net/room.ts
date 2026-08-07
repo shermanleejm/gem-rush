@@ -13,6 +13,7 @@
 
 import { MATCH, TICK_DT, TICK_RATE } from '../config/match.ts';
 import { UNIT_TYPES } from '../config/units.ts';
+import { BOT_POLICIES, botInput, makeBot, type Bot } from '../sim/bots.ts';
 import { DEFAULT_MODE, eligibleModes, type GameModeId } from '../config/modes.ts';
 import type {
   ClientMessage,
@@ -42,6 +43,21 @@ export interface RoomMember {
 
 export type Broadcast = (id: PlayerId, msg: unknown) => void;
 
+/** Bot player ids start here, safely above any id handed to a real member. */
+const BOT_ID_BASE = 10_000;
+
+/** Filler names. Plain and clearly not people, so the scoreboard reads honestly. */
+const BOT_NAMES = [
+  'Rook',
+  'Pip',
+  'Vex',
+  'Nim',
+  'Bolt',
+  'Wren',
+  'Fig',
+  'Dax',
+];
+
 const KIND_INDEX = new Map(ENTITY_KINDS.map((k, i) => [k, i]));
 const UNIT_INDEX = new Map(UNIT_TYPES.map((u, i) => [u, i]));
 
@@ -56,6 +72,15 @@ export class Room {
   private seed = 0;
   /** The mode this match is running. Drawn at random in `start()`. */
   mode: GameModeId = DEFAULT_MODE;
+  /**
+   * Bots that pad the lobby out to a full house.
+   *
+   * A match with two humans in an eight-player arena is a very different — and
+   * much duller — game than the one that was designed: nobody to bust, no
+   * contest for the middle, and the map's whole yield to yourself. Filling the
+   * remaining slots means the arena always plays the way it was balanced.
+   */
+  private bots: Bot[] = [];
 
   /** Rolling stats for the dev overlay and the §5 budget check. */
   stats = { tickMs: 0, snapshotBytes: 0, entities: 0 };
@@ -260,11 +285,25 @@ export class Room {
     const choices = eligibleModes(participants.length);
     this.mode = choices[Math.floor(Math.random() * choices.length)] ?? DEFAULT_MODE;
 
-    this.world = new World(this.seed, participants.length, this.mode);
+    // Bots fill every empty seat. The world is sized for the full roster, not
+    // just the humans, so home pads are spread for eight either way.
+    const botCount = Math.max(0, MATCH.maxPlayers - participants.length);
+    const total = participants.length + botCount;
+
+    this.world = new World(this.seed, total, this.mode);
     for (const m of participants) {
       this.world.addPlayer(m.id, m.name);
       m.lastSent.clear();
       m.lastFullTick = -Infinity;
+    }
+
+    this.bots = [];
+    for (let i = 0; i < botCount; i++) {
+      // Ids sit above any human id so they can never collide with a member.
+      const id = BOT_ID_BASE + i;
+      const policy = BOT_POLICIES[i % BOT_POLICIES.length]!;
+      this.world.addPlayer(id, BOT_NAMES[i % BOT_NAMES.length]!);
+      this.bots.push(makeBot(id, policy, i));
     }
     // Opens the character draft; `World.start()` runs when everyone has picked.
     this.world.beginDraft();
@@ -304,6 +343,7 @@ export class Room {
   /** Reset to lobby for a rematch without restarting the host process (§M6). */
   reset(): void {
     this.world = null;
+    this.bots = [];
     this.state = 'lobby';
     for (const m of this.members.values()) {
       m.ready = false;
@@ -339,6 +379,9 @@ export class Room {
     const inputs = new Map<PlayerId, InputCommand>();
     for (const m of this.members.values()) {
       if (m.connected) inputs.set(m.id, m.input);
+    }
+    for (const bot of this.bots) {
+      inputs.set(bot.playerId, botInput(world, bot, world.tickNumber));
     }
 
     const t0 = Date.now();

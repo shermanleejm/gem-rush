@@ -53,7 +53,19 @@ export class Scene {
   private shadowPool: Sprite[] = [];
   private shadows: Sprite[] = [];
   private effects: { s: Sprite; life: number; max: number; vx: number; vy: number }[] = [];
+  private projectiles: {
+    s: Sprite;
+    life: number;
+    max: number;
+    fromX: number;
+    fromY: number;
+    toX: number;
+    toY: number;
+    color: number;
+  }[] = [];
   private effectPool: Sprite[] = [];
+  private barPool: Graphics[] = [];
+  private activeBars: Graphics[] = [];
 
   private camX = MAP.size / 2;
   private camY = MAP.size / 2;
@@ -229,6 +241,13 @@ export class Scene {
     }
     this.active.length = 0;
 
+    for (const g of this.activeBars) {
+      g.visible = false;
+      if (g.parent) g.parent.removeChild(g);
+      this.barPool.push(g);
+    }
+    this.activeBars.length = 0;
+
     for (const t of this.activeLabels) {
       t.visible = false;
       if (t.parent) t.parent.removeChild(t);
@@ -299,6 +318,7 @@ export class Scene {
 
     for (const e of sorted) this.drawEntity(e, localLeader);
     this.updateEffects(dt);
+    this.updateProjectiles(dt);
   }
 
   private drawEntity(e: ViewEntity, localLeader: { x: number; y: number } | null): void {
@@ -425,12 +445,17 @@ export class Scene {
     s.y = py + bob;
     this.entityLayer.addChild(s);
 
-    // Damage tint: cheaper and more readable at this size than an HP bar.
     if (e.kind === 'unit' || e.kind === 'creep') {
-      if (e.hpFrac < 0.999) {
-        s.alpha = 0.45 + e.hpFrac * 0.55;
-      } else {
-        s.alpha = 1;
+      // A light damage tint on top of the bar. The bar gives the number, the
+      // fade gives the at-a-glance read when there are twenty units on screen
+      // and nobody is reading bars.
+      s.alpha = e.hpFrac < 0.999 ? 0.72 + e.hpFrac * 0.28 : 1;
+
+      // Health bar, drawn only once a unit is actually hurt. Showing a full bar
+      // over every unit at all times turns a busy fight into a wall of green
+      // and hides the one piece of information the bar exists to give.
+      if (e.hpFrac < 0.995) {
+        this.drawHealthBar(s.x, s.y - size * 0.62, size * 0.86, e.hpFrac, e.team);
       }
       // A thin ring marks fused and elite units so upgrades are legible.
       if (e.tier > 0) {
@@ -446,6 +471,38 @@ export class Scene {
     } else {
       s.alpha = 1;
     }
+  }
+
+  /**
+   * A health bar above a unit.
+   *
+   * Drawn as pooled `Graphics` rather than sprites: a bar is two rectangles
+   * whose width changes every frame, and rebuilding two rects is cheaper than
+   * the texture swap and nine-slice a scaled sprite would need. Colour comes
+   * from the health, not the team — when you are deciding whether to commit to
+   * a fight, "how nearly dead is it" beats "whose is it", and the sprite
+   * underneath already carries the team colour.
+   */
+  private drawHealthBar(x: number, y: number, width: number, frac: number, team: number): void {
+    const g = this.barPool.pop() ?? new Graphics();
+    g.clear();
+    g.visible = true;
+
+    const h = 0.13;
+    const w = width;
+    const clamped = Math.max(0, Math.min(1, frac));
+    const fill = clamped > 0.6 ? 0x5ad46a : clamped > 0.3 ? 0xffc93c : 0xff5a5a;
+
+    g.roundRect(-w / 2, -h / 2, w, h, h / 2).fill({ color: 0x11161f, alpha: 0.72 });
+    if (clamped > 0) {
+      g.roundRect(-w / 2, -h / 2, w * clamped, h, h / 2).fill(fill);
+    }
+    g.x = x;
+    g.y = y;
+    void team;
+
+    this.activeBars.push(g);
+    this.entityLayer.addChild(g);
   }
 
   /** Set by the app so the renderer knows which leader to predict. */
@@ -476,6 +533,90 @@ export class Scene {
 
   spawnBurst(x: number, y: number, color: number, count = 6): void {
     for (let i = 0; i < count; i++) this.spawnHit(x, y, color);
+  }
+
+  /**
+   * A shot travelling from attacker to target.
+   *
+   * Purely cosmetic and deliberately so: the sim resolved this hit the instant
+   * it happened, so the projectile is a *replay* of a decided event, not a
+   * thing that can miss. It is given a fixed flight time rather than a fixed
+   * speed, so a long shot and a short one both land before the next volley and
+   * the visuals never drift out of step with the damage numbers.
+   */
+  spawnProjectile(fromX: number, fromY: number, toX: number, toY: number, color: number): void {
+    const s = this.effectPool.pop() ?? new Sprite();
+    s.texture = this.atlas.spark;
+    s.anchor.set(0.5);
+    s.tint = color;
+    s.width = s.height = 0.34;
+    s.alpha = 1;
+    s.x = fromX;
+    s.y = fromY;
+    s.visible = true;
+    this.effectLayer.addChild(s);
+
+    const flight = 0.12;
+    this.projectiles.push({
+      s,
+      life: flight,
+      max: flight,
+      fromX,
+      fromY,
+      toX,
+      toY,
+      color,
+    });
+  }
+
+  /**
+   * A melee lunge: a streak thrown a short way toward the victim.
+   * Cheaper and clearer than animating the attacker's sprite, which is a pooled
+   * quad shared between frames and has no persistent identity to animate.
+   */
+  spawnSwing(fromX: number, fromY: number, toX: number, toY: number, color: number): void {
+    const dx = toX - fromX;
+    const dy = toY - fromY;
+    const len = Math.hypot(dx, dy) || 1;
+    const s = this.effectPool.pop() ?? new Sprite();
+    s.texture = this.atlas.spark;
+    s.anchor.set(0.5);
+    s.tint = color;
+    s.width = 0.62;
+    s.height = 0.24;
+    s.alpha = 0.95;
+    s.rotation = Math.atan2(dy, dx);
+    s.x = fromX + (dx / len) * 0.4;
+    s.y = fromY + (dy / len) * 0.4;
+    s.visible = true;
+    this.effectLayer.addChild(s);
+    this.effects.push({
+      s,
+      life: 0.16,
+      max: 0.16,
+      vx: (dx / len) * 2.6,
+      vy: (dy / len) * 2.6,
+    });
+  }
+
+  private updateProjectiles(dt: number): void {
+    for (let i = this.projectiles.length - 1; i >= 0; i--) {
+      const p = this.projectiles[i]!;
+      p.life -= dt;
+      if (p.life <= 0) {
+        p.s.visible = false;
+        if (p.s.parent) p.s.parent.removeChild(p.s);
+        this.effectPool.push(p.s);
+        this.projectiles.splice(i, 1);
+        // Impact sparks where it lands, so the shot resolves visibly.
+        this.spawnHit(p.toX, p.toY, p.color);
+        this.spawnHit(p.toX, p.toY, p.color);
+        continue;
+      }
+      const t = 1 - p.life / p.max;
+      p.s.x = p.fromX + (p.toX - p.fromX) * t;
+      p.s.y = p.fromY + (p.toY - p.fromY) * t;
+    }
   }
 
   private updateEffects(dt: number): void {

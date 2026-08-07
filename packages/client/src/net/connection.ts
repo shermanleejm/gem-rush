@@ -92,6 +92,14 @@ export class Connection {
   phase = 'lobby';
   timeRemaining = 0;
   assignments = new Map<number, number>();
+  /**
+   * Display names for everyone in the match, bots included.
+   *
+   * The lobby list only ever contains connected members, so bots that fill the
+   * empty seats have no entry there and would render as raw ids. The start
+   * message carries the full roster, so that is where names come from.
+   */
+  names = new Map<number, string>();
 
   /** Predicted local leader position. */
   predicted = { x: 0, y: 0, valid: false };
@@ -168,8 +176,10 @@ export class Connection {
 
       case 'start':
         this.assignments.clear();
+        this.names.clear();
         for (const a of msg.assignments) {
           this.assignments.set(a.id, a.index);
+          this.names.set(a.id, a.name);
           if (a.id === this.playerId) this.playerIndex = a.index;
         }
         this.buffer.length = 0;

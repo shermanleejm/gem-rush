@@ -313,6 +313,84 @@ describe('game modes', () => {
   });
 });
 
+describe('squad-versus-squad', () => {
+  it('closes the distance and fights instead of walking past', () => {
+    // Units used to hold formation absolutely and only swing at whatever
+    // happened to fall inside attack range, so two squads could pass through
+    // each other trading almost nothing. Placed five tiles apart — inside the
+    // engage radius but far outside any attack range — they must now commit.
+    const w = new World(5150, 2, 'gemHunt', 'quarry');
+    const a = w.addPlayer(1, 'A');
+    const b = w.addPlayer(2, 'B');
+    w.start();
+
+    const la = w.leaderOf(a)!;
+    const lb = w.leaderOf(b)!;
+    la.x = 32;
+    la.y = 30;
+    lb.x = 32;
+    lb.y = 35;
+    for (const u of w.squadOf(a.index)) w.store.despawn(u);
+    for (const u of w.squadOf(b.index)) w.store.despawn(u);
+    for (let i = 0; i < 3; i++) {
+      const ua = spawnUnit(w.store, a.index, 'brute', 0, 31.5 + i * 0.5, 30.4);
+      ua.alliance = a.alliance;
+      const ub = spawnUnit(w.store, b.index, 'brute', 0, 31.5 + i * 0.5, 34.6);
+      ub.alliance = b.alliance;
+    }
+
+    const gap = (): number => {
+      const ua = w.squadOf(a.index);
+      const ub = w.squadOf(b.index);
+      if (!ua.length || !ub.length) return -1;
+      let m = Infinity;
+      for (const x of ua) for (const y of ub) m = Math.min(m, Math.hypot(x.x - y.x, x.y - y.y));
+      return m;
+    };
+
+    const before = gap();
+    expect(before).toBeGreaterThan(3);
+
+    let pvpHits = 0;
+    const stand = idle([1, 2]);
+    for (let i = 0; i < 60; i++) {
+      w.tick(stand);
+      for (const ev of w.events) {
+        if (ev.t !== 'hit') continue;
+        if (w.store.get(ev.targetId)?.kind === 'unit') pvpHits++;
+      }
+    }
+
+    expect(gap()).toBeLessThan(1.5);
+    expect(pvpHits).toBeGreaterThan(0);
+  });
+
+  it('keeps units on a leash so a squad cannot be baited apart', () => {
+    const w = new World(5151, 2, 'gemHunt', 'quarry');
+    const a = w.addPlayer(1, 'A');
+    const b = w.addPlayer(2, 'B');
+    w.start();
+
+    const la = w.leaderOf(a)!;
+    la.x = 32;
+    la.y = 32;
+    for (const u of w.squadOf(a.index)) w.store.despawn(u);
+    const mine = spawnUnit(w.store, a.index, 'brute', 0, 32, 32.5);
+    mine.alliance = a.alliance;
+
+    // A lone enemy far across the arena must not drag the unit off its leader.
+    const lb = w.leaderOf(b)!;
+    lb.x = 55;
+    lb.y = 55;
+    for (const u of w.squadOf(b.index)) w.store.despawn(u);
+    const bait = spawnUnit(w.store, b.index, 'brute', 0, 55, 55);
+    bait.alliance = b.alliance;
+
+    for (let i = 0; i < 120; i++) w.tick(idle([1, 2]));
+    expect(Math.hypot(mine.x - la.x, mine.y - la.y)).toBeLessThan(9);
+  });
+});
+
 describe('combat mechanics from the new roster', () => {
   it('stuns lock a unit out of attacking', () => {
     const w = new World(41, 1);

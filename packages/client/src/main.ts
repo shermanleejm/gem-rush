@@ -219,7 +219,14 @@ function handleEvents(events: WorldEvent[]): void {
   for (const ev of events) {
     switch (ev.t) {
       case 'hit':
-        scene.spawnHit(ev.x, ev.y, 0xffd9a0);
+        // Ranged attacks fly; melee attacks lunge. The sim already resolved the
+        // damage, so both are replays of a settled event and neither can miss.
+        if (ev.ranged) {
+          scene.spawnProjectile(ev.sx, ev.sy, ev.x, ev.y, 0xffe9a8);
+        } else {
+          scene.spawnSwing(ev.sx, ev.sy, ev.x, ev.y, 0xffd9a0);
+          scene.spawnHit(ev.x, ev.y, 0xffd9a0);
+        }
         audio.play('hit');
         break;
       case 'death':
@@ -398,7 +405,7 @@ function frame(now: number): void {
       const rows = conn.players
         .map((p) => ({
           id: p.id,
-          name: lobbyPlayers.find((l) => l.id === p.id)?.name ?? `P${p.id}`,
+          name: conn.names.get(p.id) ?? lobbyPlayers.find((l) => l.id === p.id)?.name ?? `P${p.id}`,
           gems: scoreOf(p),
           out: p.out,
         }))

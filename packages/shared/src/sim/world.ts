@@ -107,7 +107,24 @@ export interface PlayerState {
 }
 
 export type WorldEvent =
-  | { t: 'hit'; x: number; y: number; targetId: EntityId; amount: number }
+  /**
+   * A landed hit. Carries the attacker's position and reach as well as the
+   * target's, because the client draws the shot: a ranged attack needs
+   * somewhere to fly *from*, and a melee swing needs a direction to lunge in.
+   * Without the source, every attack could only be rendered as a puff on the
+   * victim.
+   */
+  | {
+      t: 'hit';
+      x: number;
+      y: number;
+      sx: number;
+      sy: number;
+      /** True when the attacker's reach makes this a shot rather than a swing. */
+      ranged: boolean;
+      targetId: EntityId;
+      amount: number;
+    }
   | { t: 'death'; x: number; y: number; id: EntityId; kind: string }
   | { t: 'gem'; x: number; y: number; player: PlayerId; value: number }
   | { t: 'coin'; x: number; y: number; player: PlayerId; value: number }
@@ -123,6 +140,11 @@ export type WorldEvent =
   | { t: 'draftOffer'; player: PlayerId; options: UnitType[] }
   | { t: 'draftPick'; player: PlayerId; unit: UnitType }
   | { t: 'phase'; phase: Phase };
+
+/** How far a unit will notice an enemy and step out to meet it. */
+const ENGAGE_RADIUS = 6;
+/** How far it may stray from its formation slot while doing so. */
+const LEASH_RADIUS = 7;
 
 const scratchVec: Vec2 = { x: 0, y: 0 };
 const scratchSlot: Vec2 = { x: 0, y: 0 };
@@ -500,6 +522,37 @@ export class World {
     }
   }
 
+  /**
+   * The closest hostile unit worth stepping out of formation for.
+   *
+   * Two radii do the work. `ENGAGE_RADIUS` is how far a unit will notice an
+   * enemy, comfortably wider than any attack range so squads commit to a fight
+   * rather than trading one hit in passing. `LEASH_RADIUS` is measured from the
+   * unit's formation slot, not from the unit, so the squad's centre of mass
+   * stays with the leader however long the fight runs.
+   */
+  private nearestFoe(unit: Entity, slotX: number, slotY: number): Entity | null {
+    let best: Entity | null = null;
+    let bestDistSq = ENGAGE_RADIUS * ENGAGE_RADIUS;
+    const leashSq = LEASH_RADIUS * LEASH_RADIUS;
+
+    for (const e of this.store.items) {
+      if (!e.alive || e.hp <= 0) continue;
+      if (e.kind !== 'unit' && e.kind !== 'creep') continue;
+      if (e.alliance === unit.alliance) continue;
+      // Creeps are scenery that fights back; they should not drag a squad off
+      // its route the way an enemy player does.
+      if (e.kind === 'creep' && distanceSq(slotX, slotY, e.x, e.y) > leashSq * 0.4) continue;
+      if (distanceSq(slotX, slotY, e.x, e.y) > leashSq) continue;
+
+      const dSq = distanceSq(unit.x, unit.y, e.x, e.y);
+      if (dSq >= bestDistSq) continue;
+      bestDistSq = dSq;
+      best = e;
+    }
+    return best;
+  }
+
   /** Speed multiplier for whatever is underfoot at this position. */
   private terrainMultAt(x: number, y: number): number {
     return isGrassAt(this.map.tiles, x, y, this.map.size) ? GRASS_SPEED_MULT : 1;
@@ -696,13 +749,25 @@ export class World {
           continue;
         }
         slotPosition(scratchSlot, leader.x, leader.y, player.facing, unit.slot);
+
+        // Engage, don't just brush past. Units used to hold formation
+        // absolutely and only swing at whatever happened to fall inside attack
+        // range, so two squads could walk through each other trading almost no
+        // blows and squad-vs-squad barely existed. A unit will now step out to
+        // meet a nearby enemy — but only as far as the leash allows, measured
+        // from its slot, so the squad still moves as a squad and cannot be
+        // pulled apart across the map by bait.
+        const foe = this.nearestFoe(unit, scratchSlot.x, scratchSlot.y);
+        const targetX = foe ? foe.x : scratchSlot.x;
+        const targetY = foe ? foe.y : scratchSlot.y;
+
         const speed = unitMoveSpeed(
           unit,
           baseSpeed,
           squadSpeedBonus,
           this.terrainMultAt(unit.x, unit.y),
         );
-        steerToSlot(unit, scratchSlot.x, scratchSlot.y, speed);
+        steerToSlot(unit, targetX, targetY, speed);
         this.moveWithCollision(unit, dt);
       }
       separate(squad, 6, dt);
@@ -756,7 +821,24 @@ export class World {
     for (const d of this.damageBuf) {
       const target = this.store.get(d.targetId);
       if (target) target.lastDamagedAt = now;
-      this.events.push({ t: 'hit', x: d.x, y: d.y, targetId: d.targetId, amount: d.amount });
+
+      // Where the blow came from, so the client can draw a projectile or a
+      // lunge. The source may already be dead this tick, in which case fall
+      // back to the impact point and the client just draws the puff.
+      const src = this.store.get(d.sourceId);
+      const def = src?.unitType ? UNIT_DEFS[src.unitType] : null;
+      this.events.push({
+        t: 'hit',
+        x: d.x,
+        y: d.y,
+        sx: src ? src.x : d.x,
+        sy: src ? src.y : d.y,
+        // Reach, not class: a Bombardier lobbing from 3.2 tiles should read as
+        // a shot even though it is filed as a Fighter.
+        ranged: (def?.attackRange ?? 0) > 1.6,
+        targetId: d.targetId,
+        amount: d.amount,
+      });
     }
 
     this.applyRegen(dt, now);

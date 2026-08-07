@@ -255,30 +255,39 @@ function main(): void {
   /*
    * Is spending worth it?
    *
-   * Deliberately compares the *opportunistic* buyer (greedyGem: farms, buys
-   * when comfortably rich) against the one that never buys (turtle) — not the
-   * chest-hungry extreme. chestHungry diverts to a chest the instant it can
-   * afford one, so it spends the match commuting rather than farming; its low
-   * win rate measures that travel cost, not whether units are worth their gems.
-   * Sweeping chestPriceStep 3 -> 1 raised its purchases from 5.8 to 8.8 and its
-   * win rate only from 0.0% to 2.5%, which is what ruled price out as the cause.
+   * Compares whichever policy actually bought the most against the one that
+   * never buys. This used to hard-code greedyGem as "the opportunistic buyer",
+   * which was a fair proxy when it bought several chests a match — but once
+   * prices escalated and coins became a separate currency it settled at 0.6
+   * purchases, so the check was comparing a near-abstainer against an abstainer
+   * and reporting that spending did not pay while the actual biggest spender
+   * was winning outright. Picking the buyer from the data keeps the question
+   * ("does a bigger squad win?") pointed at a bot that has one.
    */
-  const greedy = agg.get('greedyGem')!;
-  const greedyWin = (greedy.wins / Math.max(1, greedy.played)) * 100;
-  const greedyChests = greedy.chests / Math.max(1, greedy.played);
+  let buyer = agg.get('greedyGem')!;
+  let buyerPolicy: BotPolicy = 'greedyGem';
+  for (const p of BOT_POLICIES) {
+    const a = agg.get(p)!;
+    if (a.chests / Math.max(1, a.played) > buyer.chests / Math.max(1, buyer.played)) {
+      buyer = a;
+      buyerPolicy = p;
+    }
+  }
+  const greedyWin = (buyer.wins / Math.max(1, buyer.played)) * 100;
+  const greedyChests = buyer.chests / Math.max(1, buyer.played);
   if (greedyChests < 0.25) {
     verdicts.push(
-      `WARN  the opportunistic buyer bought ${greedyChests.toFixed(2)} chests — too few ` +
-        `to judge whether spending pays. Lower chestBasePrice.`,
+      `WARN  the biggest buyer (${buyerPolicy}) bought ${greedyChests.toFixed(2)} chests — ` +
+        `too few to judge whether spending pays. Lower chestBasePrice.`,
     );
   } else if (greedyWin <= turtleWin) {
     verdicts.push(
-      `FAIL  opportunistic buying (${greedyWin.toFixed(1)}%) does not beat never buying ` +
-        `(${turtleWin.toFixed(1)}%) — chests are not worth their gems.`,
+      `FAIL  buying (${buyerPolicy}, ${greedyWin.toFixed(1)}%) does not beat never buying ` +
+        `(${turtleWin.toFixed(1)}%) — chests are not worth their coins.`,
     );
   } else {
     verdicts.push(
-      `OK    opportunistic buying wins ${greedyWin.toFixed(1)}% vs ${turtleWin.toFixed(1)}% for ` +
+      `OK    buying (${buyerPolicy}) wins ${greedyWin.toFixed(1)}% vs ${turtleWin.toFixed(1)}% for ` +
         `never buying — spending pays, over-buying (${chestyWin.toFixed(1)}%) does not.`,
     );
   }
