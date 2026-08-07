@@ -20,8 +20,8 @@ import {
 } from '../config/units.ts';
 import { Rng } from '../math/rng.ts';
 import { squadAuras } from './auras.ts';
-import { rollChestRarity, spawnUnit, unlockedRarities } from './spawning.ts';
-import { World, type InputCommand } from './world.ts';
+import { rollChestRarity, spawnProp, spawnUnit, unlockedRarities } from './spawning.ts';
+import { World, squadGemScale, type InputCommand } from './world.ts';
 
 const idle = (ids: number[]): Map<number, InputCommand> =>
   new Map(ids.map((id) => [id, { seq: 1, dirX: 0, dirY: 0 }]));
@@ -402,5 +402,43 @@ describe('combat mechanics from the new roster', () => {
 
   it('caps the supplier curve however many suppliers pile in', () => {
     expect(gemMultiplier(99)).toBeLessThanOrEqual(2);
+  });
+});
+
+describe('squad-size gem falloff', () => {
+  it('is the dial that keeps hoarding and buying at parity', () => {
+    // A lone leader banks at full rate; a big squad gives up a real slice.
+    expect(squadGemScale(1)).toBe(1);
+    expect(squadGemScale(5)).toBeLessThan(squadGemScale(1));
+    expect(squadGemScale(12)).toBeLessThan(squadGemScale(5));
+    // But never so much that a squad becomes an income liability — it must
+    // still be worth buying, just not proportionally.
+    expect(squadGemScale(MATCH.squadCap)).toBeGreaterThan(0.2);
+  });
+
+  it('scales what a player actually banks', () => {
+    const banked = (extraUnits: number): number => {
+      const w = new World(8100, 1);
+      const p = w.addPlayer(1, 'P');
+      w.start();
+      const leader = w.leaderOf(p)!;
+      for (const e of w.store.items) {
+        if (e.alive && (e.kind === 'prop' || e.kind === 'node' || e.kind === 'creep')) {
+          w.store.despawn(e);
+        }
+      }
+      for (let i = 0; i < extraUnits; i++) {
+        spawnUnit(w.store, p.index, 'brute', 0, leader.x + 2 + i * 0.3, leader.y + 2);
+      }
+      const prop = spawnProp(w.store, leader.x + 0.8, leader.y);
+      let total = 0;
+      for (let i = 0; i < 300; i++) {
+        w.tick(idle([1]));
+        for (const ev of w.events) if (ev.t === 'gem') total += ev.value;
+        if (total > 0 && !w.store.get(prop.id) && w.store.count('gem') === 0) break;
+      }
+      return total;
+    };
+    expect(banked(10)).toBeLessThan(banked(0));
   });
 });

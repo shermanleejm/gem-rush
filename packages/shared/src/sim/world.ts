@@ -935,6 +935,7 @@ export class World {
       if (owner && harvested) {
         base *= this.aurasOf(owner.id).gemMultiplier;
       }
+      if (owner) base *= squadGemScale(this.squadSize(owner.index));
     }
 
     base *= this.mode.economyScale * this.battleMod.lootMultiplier;
@@ -1079,7 +1080,11 @@ export class World {
       // chests was pure cost. The bench harness measured identical gross income
       // (~73 gems) for a bot that bought five chests and one that bought none.
       const leaderPickupSq = 1.1 * 1.1;
-      const unitPickupSq = 0.95 * 0.95;
+      // Squadmates only sweep up what they are practically standing on. The
+      // leader is the one carrying the bag, and its reach does not grow with
+      // the squad — which is what stops a big squad banking proportionally
+      // faster than a lone farmer and keeps the hoarding opening competitive.
+      const unitPickupSq = 0.5 * 0.5;
       const squad = this.squads.get(player.id) ?? [];
 
       for (const e of this.store.items) {
@@ -1387,6 +1392,17 @@ export class World {
     // finishing the match is worth something.
     return rows.sort((a, b) => b.score - a.score);
   }
+}
+
+/**
+ * Gem income multiplier for a squad of this size.
+ *
+ * Hyperbolic rather than linear, so the first few units barely cost anything
+ * and a very large squad gives up a meaningful slice of its banking rate. See
+ * `MATCH.squadGemFalloff` for why this exists at all.
+ */
+export function squadGemScale(squadSize: number): number {
+  return 1 / (1 + MATCH.squadGemFalloff * Math.max(0, squadSize - 1));
 }
 
 /** Creeps only retaliate against player units in reach; they never roam. */

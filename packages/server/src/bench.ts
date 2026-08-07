@@ -226,7 +226,6 @@ function main(): void {
   const turtle = agg.get('turtle')!;
   const chesty = agg.get('chestHungry')!;
   const turtleWin = (turtle.wins / Math.max(1, turtle.played)) * 100;
-  const chestyWin = (chesty.wins / Math.max(1, chesty.played)) * 100;
 
   const verdicts: string[] = [];
   // §M5: "someone who never buys a chest should sometimes win".
@@ -253,16 +252,19 @@ function main(): void {
   }
 
   /*
-   * Is spending worth it?
+   * Are both openings viable?
    *
-   * Compares whichever policy actually bought the most against the one that
-   * never buys. This used to hard-code greedyGem as "the opportunistic buyer",
-   * which was a fair proxy when it bought several chests a match — but once
-   * prices escalated and coins became a separate currency it settled at 0.6
-   * purchases, so the check was comparing a near-abstainer against an abstainer
-   * and reporting that spending did not pay while the actual biggest spender
-   * was winning outright. Picking the buyer from the data keeps the question
-   * ("does a bigger squad win?") pointed at a bot that has one.
+   * The target is *parity*, not dominance. This check used to demand that
+   * buying beat hoarding, on the theory that a squad you paid for ought to win
+   * — but that makes hoarding a trap, and a game with one correct opening has
+   * no opening decision in it. Snowballing into a big squad and patiently
+   * farming with a small one should both be live, so the failure conditions
+   * are now symmetric: either one running away from the other is a problem.
+   *
+   * The buyer is picked from the data rather than hard-coded. greedyGem was
+   * once a fair proxy for "opportunistic buyer", but after prices escalated it
+   * settled at under one purchase a match, and the check ended up comparing a
+   * near-abstainer against an abstainer.
    */
   let buyer = agg.get('greedyGem')!;
   let buyerPolicy: BotPolicy = 'greedyGem';
@@ -275,20 +277,31 @@ function main(): void {
   }
   const greedyWin = (buyer.wins / Math.max(1, buyer.played)) * 100;
   const greedyChests = buyer.chests / Math.max(1, buyer.played);
+  // How far apart the two openings may sit before one is simply better.
+  const PARITY_BAND = 6;
+  const gap = greedyWin - turtleWin;
+
   if (greedyChests < 0.25) {
     verdicts.push(
       `WARN  the biggest buyer (${buyerPolicy}) bought ${greedyChests.toFixed(2)} chests — ` +
         `too few to judge whether spending pays. Lower chestBasePrice.`,
     );
-  } else if (greedyWin <= turtleWin) {
+  } else if (gap < -PARITY_BAND) {
     verdicts.push(
-      `FAIL  buying (${buyerPolicy}, ${greedyWin.toFixed(1)}%) does not beat never buying ` +
-        `(${turtleWin.toFixed(1)}%) — chests are not worth their coins.`,
+      `FAIL  buying (${buyerPolicy}, ${greedyWin.toFixed(1)}%) trails never buying ` +
+        `(${turtleWin.toFixed(1)}%) by ${(-gap).toFixed(1)}pp — chests are not worth their ` +
+        `coins. Lower squadGemFalloff.`,
+    );
+  } else if (gap > PARITY_BAND) {
+    verdicts.push(
+      `FAIL  buying (${buyerPolicy}, ${greedyWin.toFixed(1)}%) beats never buying ` +
+        `(${turtleWin.toFixed(1)}%) by ${gap.toFixed(1)}pp — hoarding is a trap. ` +
+        `Raise squadGemFalloff.`,
     );
   } else {
     verdicts.push(
-      `OK    buying (${buyerPolicy}) wins ${greedyWin.toFixed(1)}% vs ${turtleWin.toFixed(1)}% for ` +
-        `never buying — spending pays, over-buying (${chestyWin.toFixed(1)}%) does not.`,
+      `OK    buying (${buyerPolicy}) ${greedyWin.toFixed(1)}% vs never buying ` +
+        `${turtleWin.toFixed(1)}% — both openings viable, ${Math.abs(gap).toFixed(1)}pp apart.`,
     );
   }
 

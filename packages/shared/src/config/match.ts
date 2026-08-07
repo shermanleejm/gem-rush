@@ -107,6 +107,21 @@ export interface MatchConfig {
    */
   regenPerSecond: number;
   regenDelaySeconds: number;
+
+  /**
+   * Diminishing gem returns per extra squad member.
+   *
+   * A bigger squad is better at everything — more damage, more reach, more
+   * hands picking things up — so gem income scaled with squad size and the
+   * hoarding opening simply could not keep pace. Raising what scenery paid did
+   * not help, because a big squad farms scenery faster too.
+   *
+   * This is the dial that separates the two. A squad is still strictly better
+   * in a fight and still clears camps a lone leader cannot touch; it just does
+   * not bank proportionally more, so patiently farming with a small squad and
+   * snowballing into a large one come out about even.
+   */
+  squadGemFalloff: number;
 }
 
 export const MATCH: MatchConfig = {
@@ -122,7 +137,7 @@ export const MATCH: MatchConfig = {
   draftSeconds: 15,
   draftOfferCount: 3,
   chestBasePrice: 10,
-  chestPriceStep: 3,
+  chestPriceStep: 5,
   chestOfferCount: 3,
   fusionThreshold: 3,
   gemLossFraction: 0.2,
@@ -143,6 +158,7 @@ export const MATCH: MatchConfig = {
   reconnectGraceSeconds: 30,
   regenPerSecond: 6,
   regenDelaySeconds: 4,
+  squadGemFalloff: 0.24,
 };
 
 /**
@@ -171,15 +187,17 @@ export const COIN_YIELD = {
 };
 
 export const GEM_YIELD = {
-  // Scenery pays coins, not score. Score lives on the creep camps, which a
-  // lone leader cannot touch — that is the link that makes squad size worth
-  // paying for. Without it, never buying scored as well as buying.
-  prop: 1,
-  resourceNode: 4,
-  creep: 9,
-  creepCampBonus: 50,
-  tree: 18,
-  field: 15,
+  // The split between scenery and camps is the dial between the two viable
+  // openings. Camps need a squad, so weighting score onto them makes buying
+  // pay; scenery can be worked by a lone leader, so weighting score onto that
+  // makes hoarding pay. Both should win about equally often, so this sits
+  // between the extremes rather than at either end.
+  prop: 3,
+  resourceNode: 11,
+  creep: 6,
+  creepCampBonus: 24,
+  tree: 30,
+  field: 25,
 };
 
 /**
