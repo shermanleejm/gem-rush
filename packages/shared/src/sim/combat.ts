@@ -17,7 +17,10 @@ import { TEAM_NEUTRAL, type Entity, type EntityId, type EntityStore } from './en
 function targetPriority(target: Entity, attackerAlliance: number): number {
   if (target.kind === 'unit' && target.alliance !== attackerAlliance) return 0;
   if (target.kind === 'creep') return 1;
-  if (target.kind === 'prop' || target.kind === 'node') return 2;
+  // Farmables outrank ordinary scenery: if a Farmhand is standing between a
+  // crate and a tree, the tree is what it is for.
+  if (target.kind === 'tree' || target.kind === 'field') return 2;
+  if (target.kind === 'prop' || target.kind === 'node') return 3;
   return Number.MAX_SAFE_INTEGER;
 }
 
@@ -32,6 +35,14 @@ function isValidTarget(target: Entity, attacker: Entity): boolean {
   if (target.kind === 'unit') return target.alliance !== attacker.alliance;
   if (target.kind === 'creep') return attacker.team !== TEAM_NEUTRAL;
   if (target.kind === 'prop' || target.kind === 'node') return attacker.team !== TEAM_NEUTRAL;
+
+  // Farmables are inert to everyone but their specialist. Expressed as a match
+  // on a declared field rather than a unit-name check, so adding a third
+  // farmable is one entity kind and one `harvests` value.
+  if (target.kind === 'tree' || target.kind === 'field') {
+    if (attacker.team === TEAM_NEUTRAL || !attacker.unitType) return false;
+    return UNIT_DEFS[attacker.unitType].harvests === target.kind;
+  }
   return false;
 }
 

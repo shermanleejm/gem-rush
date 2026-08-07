@@ -69,7 +69,7 @@ export type SpriteAtlas = Record<SpriteKey, Texture>;
 // a world prop lit side by side agree about what a surface is. Only the rough
 // crate/chest timber is local, since nothing else uses it.
 
-const woodMat = new MeshStandardMaterial({ color: 0xe8e8e8, roughness: 0.85, metalness: 0.0 });
+const woodMat = new MeshStandardMaterial({ color: 0xfafafa, roughness: 0.7, metalness: 0.0 });
 
 function mesh(geo: BufferGeometry, mat: MeshStandardMaterial): Mesh {
   return new Mesh(geo, mat);
@@ -272,8 +272,8 @@ function overlayArt(): Pick<SpriteAtlas, 'ring' | 'spark' | 'shadow'> {
     shadow: bakeFlat((ctx) => {
       // Soft radial falloff, squashed by the draw call into a ground ellipse.
       const grad = ctx.createRadialGradient(c, c, 0, c, c, c);
-      grad.addColorStop(0, 'rgba(0,0,0,0.55)');
-      grad.addColorStop(0.55, 'rgba(0,0,0,0.22)');
+      grad.addColorStop(0, 'rgba(0,0,0,0.38)');
+      grad.addColorStop(0.55, 'rgba(0,0,0,0.14)');
       grad.addColorStop(1, 'rgba(0,0,0,0)');
       ctx.fillStyle = grad;
       ctx.fillRect(0, 0, TEX, TEX);
@@ -360,13 +360,16 @@ export function buildSpriteAtlas(): SpriteAtlas {
 
   // Key from the upper left, fill from the right, and a dim underlight so the
   // shaded side never goes fully black once tinted.
-  const key = new DirectionalLight(0xffffff, 2.7);
+  const key = new DirectionalLight(0xffffff, 2.2);
   key.position.set(-2.4, 4.2, 3.0);
-  const fill = new DirectionalLight(0xffffff, 0.85);
+  const fill = new DirectionalLight(0xffffff, 1.25);
   fill.position.set(3.0, 1.0, 1.6);
-  const under = new DirectionalLight(0xffffff, 0.28);
+  const under = new DirectionalLight(0xffffff, 0.55);
   under.position.set(0.4, -2.2, 1.0);
-  scene.add(key, fill, under, new AmbientLight(0xffffff, 0.55));
+  // Generous ambient. A deep shadow side is what made the roster look dreary:
+  // the darkest part of a sprite sets the mood, and tinting only ever pushes it
+  // darker still.
+  scene.add(key, fill, under, new AmbientLight(0xffffff, 1.0));
 
   const atlas = {} as SpriteAtlas;
   for (const type of UNIT_TYPES) {

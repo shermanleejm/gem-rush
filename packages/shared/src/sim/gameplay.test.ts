@@ -40,14 +40,16 @@ describe('the core loop (§1.3)', () => {
     expect(player.gems).toBe(banked);
   });
 
-  it('spending on a chest actually costs banked gems (§1.4)', () => {
+  it('a chest is paid for in coins and never costs score', () => {
     const world = new World(77, 1);
     const player = world.addPlayer(1, 'Buyer');
     world.start();
 
     const leader = world.leaderOf(player)!;
+    player.coins = 200;
     player.gems = 100;
-    const before = player.gems;
+    const coinsBefore = player.coins;
+    const gemsBefore = player.gems;
     const price = player.nextChestPrice;
 
     // Park the leader on a chest and accept the first offer.
@@ -65,7 +67,9 @@ describe('the core loop (§1.3)', () => {
     const squadBefore = world.squadOf(player.index).length;
     world.tick(new Map([[1, { seq: 2, dirX: 0, dirY: 0, chestChoice: 0 }]]));
 
-    expect(player.gems).toBe(before - price);
+    expect(player.coins).toBe(coinsBefore - price);
+    // The whole point of splitting the currencies: buying must not touch score.
+    expect(player.gems).toBe(gemsBefore);
     expect(world.squadOf(player.index).length).toBe(squadBefore + 1);
     // Escalating price is what stops chests being an auto-buy (§4).
     expect(player.nextChestPrice).toBe(price + MATCH.chestPriceStep);

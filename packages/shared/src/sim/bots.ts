@@ -116,7 +116,7 @@ const LOOT_GRAB_RADIUS = 4;
 function wantsChest(bot: Bot, player: PlayerState, world: World): boolean {
   const squadFull = world.squadOf(player.index).length >= MATCH.squadCap;
   if (squadFull) return false;
-  if (player.gems < player.nextChestPrice) return false;
+  if (player.coins < player.nextChestPrice) return false;
 
   switch (bot.policy) {
     case 'chestHungry':
@@ -124,17 +124,17 @@ function wantsChest(bot: Bot, player: PlayerState, world: World): boolean {
       return true;
     case 'aggressive':
       // Buys to win fights, but keeps a little banked.
-      return player.gems >= player.nextChestPrice * 1.5;
+      return player.coins >= player.nextChestPrice * 1.5;
     case 'greedyGem':
-      // Buys only when very rich, so gems mostly stay banked as score.
-      return player.gems >= player.nextChestPrice * 4;
+      // Buys only when flush, so most coins stay unspent.
+      return player.coins >= player.nextChestPrice * 4;
     case 'turtle':
       // Never buys — this is the control that answers the M5 question
       // "can someone who never buys a chest still win?".
       return false;
     case 'controller':
       // Invests enough to hold ground, but not so much that the bank empties.
-      return player.gems >= player.nextChestPrice * 2;
+      return player.coins >= player.nextChestPrice * 2;
   }
 }
 
@@ -163,7 +163,7 @@ function movementFor(
 
     case 'chestHungry': {
       // Beeline for chests it can afford; otherwise farm to afford one.
-      if (player.gems >= player.nextChestPrice) {
+      if (player.coins >= player.nextChestPrice) {
         const chest = nearest(world, leader, (e) => e.kind === 'chest');
         if (chest) return toward(leader, chest.x, chest.y, seq);
       }
@@ -211,7 +211,7 @@ function movementFor(
       const gem = nearest(world, leader, (e) => e.kind === 'gem' && e.pickupDelay <= 0 && inZone(e));
       if (gem) return toward(leader, gem.x, gem.y, seq);
 
-      if (player.gems >= player.nextChestPrice * 2) {
+      if (player.coins >= player.nextChestPrice * 2) {
         const chest = nearest(world, leader, (e) => e.kind === 'chest' && inZone(e));
         if (chest) return toward(leader, chest.x, chest.y, seq);
       }

@@ -287,7 +287,7 @@ export class Connection {
     dirY: number,
     dt: number,
     chestChoice?: number,
-    draftChoice?: number,
+    dash?: boolean,
   ): void {
     this.seq++;
     this.pending.push({ seq: this.seq, dirX, dirY, dt });
@@ -300,7 +300,7 @@ export class Connection {
       dirX,
       dirY,
       ...(chestChoice !== undefined ? { chestChoice } : {}),
-      ...(draftChoice !== undefined ? { draftChoice } : {}),
+      ...(dash ? { dash: true } : {}),
     });
   }
 

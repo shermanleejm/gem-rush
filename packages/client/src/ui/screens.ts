@@ -15,6 +15,8 @@ import {
   type UnitType,
 } from '@gem-rush/shared';
 
+const clamp01 = (n: number): number => Math.max(0, Math.min(1, n));
+
 function el<K extends keyof HTMLElementTagNameMap>(
   tag: K,
   className?: string,
@@ -114,6 +116,42 @@ export function showModeCard(mode: GameModeId, holdSeconds = 4): () => void {
   return () => {
     clearTimeout(timer);
     root.remove();
+  };
+}
+
+/**
+ * The gem counter that rides above your own character.
+ *
+ * A DOM element positioned from world coordinates each frame rather than a Pixi
+ * text object: it needs to sit above every sprite, never scale with the camera
+ * zoom, and stay crisp — all of which the DOM does for free and a world-space
+ * label would have to fight the scene graph for.
+ */
+export function createGemTag(): {
+  set: (gems: number, screenX: number, screenY: number) => void;
+  hide: () => void;
+  destroy: () => void;
+} {
+  const tag = el('div', 'gemtag', '◆ 0');
+  tag.style.display = 'none';
+  document.body.appendChild(tag);
+  let last = -1;
+  return {
+    set(gems, screenX, screenY) {
+      if (gems !== last) {
+        tag.textContent = `◆ ${gems}`;
+        last = gems;
+      }
+      tag.style.display = '';
+      tag.style.left = `${screenX}px`;
+      tag.style.top = `${screenY}px`;
+    },
+    hide() {
+      tag.style.display = 'none';
+    },
+    destroy() {
+      tag.remove();
+    },
   };
 }
 
@@ -373,9 +411,11 @@ export function showLobby(onReady: (r: boolean) => void, onStart: () => void): L
 export interface HudHandle {
   root: HTMLElement;
   setTimer: (seconds: number, lastCall: boolean) => void;
-  setGems: (n: number) => void;
   setSquad: (n: number, cap: number) => void;
   setMode: (label: string) => void;
+  setCoins: (n: number) => void;
+  /** 0 = ready, 1 = just used. Drives the dash button's cooldown sweep. */
+  setDashCooldown: (fraction: number) => void;
   setScores: (
     rows: { id: number; name: string; gems: number; out?: boolean }[],
     myId: number,
@@ -385,21 +425,49 @@ export interface HudHandle {
   destroy: () => void;
 }
 
-export function createHud(): HudHandle {
+export function createHud(onDash: () => void = () => {}): HudHandle {
   const root = el('div', 'hud');
 
+  // Top-left: your placing, big, with a two-neighbour ladder under it. The
+  // number you care about most during a match is "am I winning", and a full
+  // eight-row scoreboard buries that — you only ever act on the player directly
+  // above and the one directly below.
+  const rankBox = el('div', 'rankbox');
+  const rankBig = el('div', 'rank-big', '1st');
+  const ladder = el('div', 'ladder');
+  rankBox.append(rankBig, ladder);
+
+  // Top-centre: clock. Top-right: coins, the only spendable resource.
   const top = el('div', 'hud-top');
   const timer = el('div', 'pill timer', '4:00');
-  const gems = el('div', 'pill gems', '0');
-  const squad = el('div', 'pill', '0/15');
   const modePill = el('div', 'pill mode', '');
-  top.append(modePill, timer, gems, squad);
+  top.append(timer, modePill);
 
-  const left = el('div', 'hud-left');
-  root.append(top, left);
+  const topRight = el('div', 'hud-topright');
+  const coins = el('div', 'pill coins', '0');
+  const squad = el('div', 'pill squad', '0/15');
+  topRight.append(coins, squad);
+
+  // Bottom-right: dash. The sweep is a conic gradient over the button rather
+  // than a separate ring, so the whole control reads as "recharging".
+  const dashBtn = el('button', 'dash');
+  dashBtn.type = 'button';
+  dashBtn.innerHTML = '<span>DASH</span>';
+  const dashSweep = el('div', 'dash-sweep');
+  dashBtn.appendChild(dashSweep);
+  dashBtn.onclick = (e) => {
+    e.preventDefault();
+    onDash();
+  };
+
+  root.append(rankBox, top, topRight, dashBtn);
   document.body.appendChild(root);
 
   let offer: HTMLElement | null = null;
+  const ordinal = (n: number): string => {
+    const suffix = n % 100 >= 11 && n % 100 <= 13 ? 'th' : ['th', 'st', 'nd', 'rd'][n % 10] ?? 'th';
+    return `${n}${suffix}`;
+  };
 
   return {
     root,
@@ -410,25 +478,41 @@ export function createHud(): HudHandle {
       timer.className = `pill timer${lastCall ? ' last-call' : ''}`;
       if (lastCall) timer.textContent += '  DOUBLE';
     },
-    setGems(n) {
-      gems.textContent = `◆ ${n}`;
-    },
     setSquad(n, cap) {
-      squad.textContent = `${n}/${cap}`;
+      squad.textContent = `⚔ ${n}/${cap}`;
+    },
+    setCoins(n) {
+      coins.textContent = `● ${n}`;
+    },
+    setDashCooldown(fraction) {
+      const pct = Math.round(clamp01(fraction) * 100);
+      dashSweep.style.height = `${pct}%`;
+      dashBtn.classList.toggle('ready', pct === 0);
     },
     setMode(label) {
       if (modePill.textContent !== label) modePill.textContent = label;
     },
     setScores(rows, myId) {
-      left.innerHTML = '';
-      for (const r of rows.slice(0, 8)) {
-        const row = el('div', `score-row${r.id === myId ? ' me' : ''}${r.out ? ' out' : ''}`);
-        const name = el('span');
+      const me = rows.findIndex((r) => r.id === myId);
+      rankBig.textContent = me >= 0 ? ordinal(me + 1) : '—';
+
+      // Only the rows either side of you. Slicing around your own index rather
+      // than taking the top three means the ladder stays useful in last place,
+      // where a leaderboard of people you cannot see is just noise.
+      ladder.innerHTML = '';
+      const from = Math.max(0, me - 1);
+      const to = Math.min(rows.length, me + 2);
+      for (let i = from; i < to; i++) {
+        const r = rows[i]!;
+        const row = el('div', `ladder-row${r.id === myId ? ' me' : ''}${r.out ? ' out' : ''}`);
+        const pos = el('span', 'pos');
+        pos.textContent = String(i + 1);
+        const name = el('span', 'nm');
         name.textContent = r.out ? `${r.name} — out` : r.name;
         const g = el('span', 'g');
         g.textContent = String(r.gems);
-        row.append(name, g);
-        left.appendChild(row);
+        row.append(pos, name, g);
+        ladder.appendChild(row);
       }
     },
     showOffer(options, price, onPick) {
@@ -448,7 +532,7 @@ export function createHud(): HudHandle {
         offer!.appendChild(b);
       });
       const cost = el('div', 'pill');
-      cost.textContent = `−${price} ◆`;
+      cost.textContent = `−${price} ●`;
       cost.style.alignSelf = 'center';
       offer.appendChild(cost);
       document.body.appendChild(offer);

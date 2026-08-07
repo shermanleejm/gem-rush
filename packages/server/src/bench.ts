@@ -60,12 +60,23 @@ interface RoundResult {
   byPlayer: {
     policy: BotPolicy;
     gems: number;
+    coinsEarned: number;
     chests: number;
     squad: number;
     rank: number;
   }[];
   /** Banked gems per policy sampled every 30s, for the gem curve. */
   samples: { t: number; policy: BotPolicy; gems: number }[];
+}
+
+/**
+ * Total coins a player has already spent, given how many chests they opened.
+ * Prices escalate per purchase, so this is the arithmetic series.
+ */
+function spentOn(chests: number): number {
+  let total = 0;
+  for (let i = 0; i < chests; i++) total += MATCH.chestBasePrice + i * MATCH.chestPriceStep;
+  return total;
 }
 
 function runRound(round: number, seed: number, playerCount: number): RoundResult {
@@ -110,6 +121,10 @@ function runRound(round: number, seed: number, playerCount: number): RoundResult
     return {
       policy: bot.policy,
       gems: p.gems,
+      // Balance plus everything already spent: what the player actually earned
+      // is the number that says whether the economy can fund a squad, and an
+      // unspent balance of zero is ambiguous between broke and thrifty.
+      coinsEarned: p.coins + spentOn(p.chestsOpened),
       chests: p.chestsOpened,
       squad: world.squadOf(p.index).length,
       rank: rankOf.get(bot.playerId) ?? playerCount,
@@ -146,13 +161,14 @@ function main(): void {
     played: number;
     wins: number;
     gems: number;
+    coinsEarned: number;
     chests: number;
     squad: number;
     rankSum: number;
   }
   const agg = new Map<BotPolicy, Agg>();
   for (const p of BOT_POLICIES) {
-    agg.set(p, { played: 0, wins: 0, gems: 0, chests: 0, squad: 0, rankSum: 0 });
+    agg.set(p, { played: 0, wins: 0, gems: 0, coinsEarned: 0, chests: 0, squad: 0, rankSum: 0 });
   }
 
   for (const res of results) {
@@ -160,6 +176,7 @@ function main(): void {
       const a = agg.get(row.policy)!;
       a.played++;
       a.gems += row.gems;
+      a.coinsEarned += row.coinsEarned;
       a.chests += row.chests;
       a.squad += row.squad;
       a.rankSum += row.rank;
@@ -170,7 +187,7 @@ function main(): void {
   const pad = (s: string, n: number): string => s.padEnd(n);
   const padL = (s: string, n: number): string => s.padStart(n);
   console.log(
-    `  ${pad('policy', 14)}${padL('win%', 8)}${padL('avg gems', 10)}` +
+    `  ${pad('policy', 14)}${padL('win%', 8)}${padL('avg gems', 10)}${padL('coins', 8)}` +
       `${padL('avg rank', 10)}${padL('chests', 9)}${padL('squad', 8)}`,
   );
   console.log(`  ${'─'.repeat(59)}`);
@@ -183,6 +200,7 @@ function main(): void {
     const line =
       `  ${pad(policy, 14)}${padL(winPct.toFixed(1), 8)}` +
       `${padL((a.gems / a.played).toFixed(1), 10)}` +
+      `${padL((a.coinsEarned / a.played).toFixed(0), 8)}` +
       `${padL((a.rankSum / a.played).toFixed(2), 10)}` +
       `${padL((a.chests / a.played).toFixed(2), 9)}` +
       `${padL((a.squad / a.played).toFixed(1), 8)}`;

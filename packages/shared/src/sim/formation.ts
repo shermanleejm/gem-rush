@@ -141,9 +141,14 @@ export function separate(units: Entity[], strength: number, dt: number): void {
 }
 
 /** Effective move speed after archetype modifier, Scout aura and any slow. */
-export function unitMoveSpeed(unit: Entity, baseSpeed: number, scoutBonus: number): number {
+export function unitMoveSpeed(
+  unit: Entity,
+  baseSpeed: number,
+  squadSpeedBonus: number,
+  terrainMult = 1,
+): number {
   const def = unit.unitType ? UNIT_DEFS[unit.unitType] : null;
   const archetype = def ? def.speed : 1;
   const slow = unit.slowRemaining > 0 ? 1 - unit.slowFactor : 1;
-  return baseSpeed * archetype * (1 + scoutBonus) * clamp(slow, 0.1, 1);
+  return baseSpeed * archetype * (1 + squadSpeedBonus) * clamp(slow, 0.1, 1) * terrainMult;
 }

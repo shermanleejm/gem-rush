@@ -42,6 +42,10 @@ export const UNIT_CLASSES = [
 
 export type UnitClass = (typeof UNIT_CLASSES)[number];
 
+/** Farmable resources, each worked by exactly one specialist. */
+export const HARVEST_KINDS = ['tree', 'field'] as const;
+export type HarvestKind = (typeof HARVEST_KINDS)[number];
+
 export const UNIT_CLASS_LABELS: Record<UnitClass, string> = {
   fighter: 'Fighter',
   hotshot: 'Hotshot',
@@ -155,6 +159,16 @@ export interface UnitDef {
   squadHpBonus: number;
   /** Reduces this player's next chest price. Suppliers only. */
   chestDiscount: number;
+  /**
+   * A farmable this unit — and only this unit — can work.
+   *
+   * Trees and carrot fields are worth far more than a crate, but they are inert
+   * to everyone except the specialist who can harvest them. That makes a
+   * Supplier a genuine key rather than a passive percentage: a squad without a
+   * Farmhand simply cannot open the orchards, so the map has value on it that
+   * your composition decides whether you can reach.
+   */
+  harvests: HarvestKind | null;
   /** Helper this unit fields, or null. */
   summonType: UnitType | null;
   /** Seconds between summons, and how many may be alive at once. */
@@ -202,6 +216,7 @@ const CLASS_BASE: Record<UnitClass, Omit<UnitDef, 'type' | 'label' | 'role' | 'c
     speedAura: 0,
     squadHpBonus: 0,
     chestDiscount: 0,
+    harvests: null,
     summonType: null,
     summonInterval: 0,
     summonCap: 0,
@@ -231,6 +246,7 @@ const CLASS_BASE: Record<UnitClass, Omit<UnitDef, 'type' | 'label' | 'role' | 'c
     speedAura: 0,
     squadHpBonus: 0,
     chestDiscount: 0,
+    harvests: null,
     summonType: null,
     summonInterval: 0,
     summonCap: 0,
@@ -261,6 +277,7 @@ const CLASS_BASE: Record<UnitClass, Omit<UnitDef, 'type' | 'label' | 'role' | 'c
     speedAura: 0,
     squadHpBonus: 0,
     chestDiscount: 0,
+    harvests: null,
     summonType: null,
     summonInterval: 0,
     summonCap: 0,
@@ -290,6 +307,7 @@ const CLASS_BASE: Record<UnitClass, Omit<UnitDef, 'type' | 'label' | 'role' | 'c
     speedAura: 0,
     squadHpBonus: 0,
     chestDiscount: 0,
+    harvests: null,
     summonType: null,
     summonInterval: 0,
     summonCap: 0,
@@ -319,6 +337,7 @@ const CLASS_BASE: Record<UnitClass, Omit<UnitDef, 'type' | 'label' | 'role' | 'c
     speedAura: 0.05,
     squadHpBonus: 0,
     chestDiscount: 0,
+    harvests: null,
     summonType: null,
     summonInterval: 0,
     summonCap: 0,
@@ -348,6 +367,7 @@ const CLASS_BASE: Record<UnitClass, Omit<UnitDef, 'type' | 'label' | 'role' | 'c
     speedAura: 0,
     squadHpBonus: 0,
     chestDiscount: 0,
+    harvests: null,
     summonType: null,
     summonInterval: 9,
     summonCap: 1,
@@ -377,6 +397,7 @@ const CLASS_BASE: Record<UnitClass, Omit<UnitDef, 'type' | 'label' | 'role' | 'c
     speedAura: 0,
     squadHpBonus: 0,
     chestDiscount: 0,
+    harvests: null,
     summonType: null,
     summonInterval: 0,
     summonCap: 0,
@@ -495,16 +516,23 @@ export const UNIT_DEFS: Record<UnitType, UnitDef> = {
     speed: 1.08,
     earlyPool: true,
   }),
-  farmhand: def('farmhand', 'Farmhand', 'supplier', 'Boosts gem income', 0xd4a373, {
+  farmhand: def('farmhand', 'Farmhand', 'supplier', 'Fells trees for a big haul', 0xd4a373, {
     gemBonus: 0.32,
+    harvests: 'tree',
+    // Needs to actually chop, so unlike other Suppliers it can hit things.
+    damage: 16,
+    attackInterval: 1.0,
   }),
   colonel: def('colonel', 'Colonel', 'supplier', 'Strong gem income', 0x606c38, {
     gemBonus: 0.42,
     hp: 100,
   }),
-  wisp: def('wisp', 'Wisp', 'supplier', 'Passive gem income', 0x9d4edd, {
+  wisp: def('wisp', 'Wisp', 'supplier', 'Harvests carrot fields', 0x9d4edd, {
     gemBonus: 0.28,
     speed: 1.05,
+    harvests: 'field',
+    damage: 14,
+    attackInterval: 1.0,
   }),
   buccaneer: def('buccaneer', 'Buccaneer', 'supplier', 'Makes chests cheaper', 0xffb703, {
     // The design's "chance of bonus chest keys" has no analogue here — there are

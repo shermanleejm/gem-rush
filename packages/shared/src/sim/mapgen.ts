@@ -11,8 +11,9 @@
  *  - every home pad has a verified floor path to the centre
  */
 
-import { MAP, TILE_FLOOR, TILE_WALL } from '../config/map.ts';
-import type { Rng } from '../math/rng.ts';
+import { MAP, TILE_FLOOR, TILE_GRASS, TILE_WALL } from '../config/map.ts';
+import { ARENAS, type MapId } from '../config/maps.ts';
+import { Rng } from '../math/rng.ts';
 
 export interface HomePad {
   playerIndex: number;
@@ -30,6 +31,19 @@ export interface GeneratedMap {
 // MAP.size has the literal type 64 and would make these only callable with 64.
 export function tileIndex(x: number, y: number, size: number = MAP.size): number {
   return y * size + x;
+}
+
+/** Is this position standing in tall grass? Grass is walkable but slow. */
+export function isGrassAt(
+  tiles: Uint8Array,
+  x: number,
+  y: number,
+  size: number = MAP.size,
+): boolean {
+  const tx = Math.floor(x);
+  const ty = Math.floor(y);
+  if (tx < 0 || ty < 0 || tx >= size || ty >= size) return false;
+  return tiles[tileIndex(tx, ty, size)] === TILE_GRASS;
 }
 
 export function isWallAt(
@@ -52,7 +66,15 @@ function scatterTerrain(tiles: Uint8Array, rng: Rng, size: number): void {
   const cx = size / 2;
   const cy = size / 2;
   const keepOpen = MAP.zoneRadii[0]! * 0.55; // centre stays fightable
-  const clusters = Math.floor(size * size * MAP.terrainDensity * 0.06);
+
+  // Derive the cluster count from the density we actually want, rather than
+  // treating density as an opaque scale factor. Blobs average ~6 tiles and a
+  // good share of them are rejected for landing in the protected centre or on
+  // the rim, so ask for more than the arithmetic suggests and let the
+  // rejections bring it back down.
+  const interior = (size - 2) * (size - 2);
+  const avgBlobTiles = 6;
+  const clusters = Math.round(((interior * MAP.terrainDensity) / avgBlobTiles) * 1.35);
 
   for (let c = 0; c < clusters; c++) {
     const bx = rng.int(2, size - 2);
@@ -69,6 +91,27 @@ function scatterTerrain(tiles: Uint8Array, rng: Rng, size: number): void {
       // Random walk keeps blobs organic and connected.
       px = Math.max(1, Math.min(size - 2, px + rng.int(-1, 2)));
       py = Math.max(1, Math.min(size - 2, py + rng.int(-1, 2)));
+    }
+  }
+
+  // Grass in broad drifts, laid after the rock so it never overwrites a wall.
+  // Larger and softer-edged than the rock blobs: grass is a region you decide
+  // to cross, so it wants to be big enough to be worth going around.
+  const grassPatches = Math.round((interior * MAP.grassDensity) / 26);
+  for (let g = 0; g < grassPatches; g++) {
+    const gx = rng.int(3, size - 3);
+    const gy = rng.int(3, size - 3);
+    const rx = rng.int(3, 7);
+    const ry = rng.int(3, 7);
+    for (let y = gy - ry; y <= gy + ry; y++) {
+      for (let x = gx - rx; x <= gx + rx; x++) {
+        if (x < 1 || y < 1 || x >= size - 1 || y >= size - 1) continue;
+        // Elliptical falloff with a ragged edge, so patches read organic.
+        const n = ((x - gx) / rx) ** 2 + ((y - gy) / ry) ** 2;
+        if (n > 1 || (n > 0.6 && rng.chance(0.5))) continue;
+        const idx = tileIndex(x, y, size);
+        if (tiles[idx] === TILE_FLOOR) tiles[idx] = TILE_GRASS;
+      }
     }
   }
 
@@ -143,6 +186,17 @@ function carveCorridor(
   }
 }
 
+/**
+ * Build one of the five fixed arenas (see config/maps.ts).
+ *
+ * The terrain seed is the arena's own, deliberately *not* the match seed — that
+ * is the whole point of having fixed maps. Only pad placement varies with the
+ * player count, and that is placement on known ground rather than a new layout.
+ */
+export function buildArena(mapId: MapId, playerCount: number): GeneratedMap {
+  return generateMap(new Rng(ARENAS[mapId].seed), playerCount);
+}
+
 export function generateMap(rng: Rng, playerCount: number): GeneratedMap {
   const size = MAP.size;
   const tiles = new Uint8Array(size * size).fill(TILE_FLOOR);
@@ -160,7 +214,8 @@ export function generateMap(rng: Rng, playerCount: number): GeneratedMap {
     const clampedX = Math.max(2, Math.min(size - 3, px));
     const clampedY = Math.max(2, Math.min(size - 3, py));
 
-    // A pad must never spawn inside rock.
+    // A pad must never spawn inside rock, or in grass that would slow every
+    // respawn out of the gate.
     for (let ox = -1; ox <= 1; ox++) {
       for (let oy = -1; oy <= 1; oy++) {
         tiles[tileIndex(clampedX + ox, clampedY + oy, size)] = TILE_FLOOR;

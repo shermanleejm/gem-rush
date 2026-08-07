@@ -39,10 +39,16 @@ import type { UnitType } from '@gem-rush/shared';
 // Near-white, because sprites are tinted per team and tint multiplies: the
 // lighting has to carry the form and the colour arrives at draw time.
 
-export const bodyMat = new MeshStandardMaterial({ color: 0xf2f2f2, roughness: 0.62, metalness: 0.06 });
-export const darkMat = new MeshStandardMaterial({ color: 0x565656, roughness: 0.5, metalness: 0.15 });
-export const trimMat = new MeshStandardMaterial({ color: 0x9a9a9a, roughness: 0.35, metalness: 0.35 });
-export const gemMat = new MeshStandardMaterial({ color: 0xffffff, roughness: 0.12, metalness: 0.1 });
+// Everything sits high on the value scale. The first pass used a mid grey for
+// trim and a near-black for detail, which looked fine untinted but turned
+// muddy and grim the moment a team colour multiplied through it — tint can only
+// ever darken. Keeping every material bright means the tint lands as a
+// saturated colour rather than a dark one, which is what makes the toy-like,
+// cheerful look the game is going for.
+export const bodyMat = new MeshStandardMaterial({ color: 0xffffff, roughness: 0.48, metalness: 0.02 });
+export const darkMat = new MeshStandardMaterial({ color: 0xb0b0b0, roughness: 0.42, metalness: 0.08 });
+export const trimMat = new MeshStandardMaterial({ color: 0xdcdcdc, roughness: 0.3, metalness: 0.18 });
+export const gemMat = new MeshStandardMaterial({ color: 0xffffff, roughness: 0.08, metalness: 0.05 });
 
 function mesh(geo: BufferGeometry, mat: MeshStandardMaterial): Mesh {
   return new Mesh(geo, mat);

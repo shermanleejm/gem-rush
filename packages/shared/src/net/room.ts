@@ -283,6 +283,7 @@ export class Room {
         tick0: 0,
         playerCount: participants.length,
         mode: this.mode,
+        map: this.world!.mapId,
         assignments,
       });
       this.send(m.id, this.mapPayload());
@@ -416,6 +417,8 @@ export class Room {
     const players: PlayerWire[] = [...world.players.values()].map((p) => ({
       id: p.id,
       g: p.gems,
+      c: p.coins,
+      dc: Math.max(0, Math.min(1, p.dashCooldown / MATCH.dashCooldownSeconds)),
       // The discounted price, since that is what the player will actually be
       // charged — showing the undiscounted one would make Suppliers look broken.
       p: world.chestPriceFor(p),

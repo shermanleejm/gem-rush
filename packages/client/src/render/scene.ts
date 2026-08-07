@@ -16,7 +16,7 @@ import {
   type Text,
 } from 'pixi.js';
 
-import { MAP, TILE_WALL, UNIT_DEFS, type UnitType } from '@gem-rush/shared';
+import { MAP, TILE_GRASS, TILE_WALL, UNIT_DEFS, type UnitType } from '@gem-rush/shared';
 
 import type { ViewEntity } from '../net/connection.ts';
 import { buildSpriteAtlas, type SpriteAtlas } from './sprites3d.ts';
@@ -69,7 +69,7 @@ export class Scene {
   async init(mount: HTMLElement): Promise<void> {
     this.app = new Application();
     await this.app.init({
-      background: 0x0b0e14,
+      background: 0x2f6b8f,
       antialias: false,
       resolution: Math.min(window.devicePixelRatio || 1, 2),
       autoDensity: true,
@@ -122,22 +122,44 @@ export class Scene {
     const pad = 200;
     const backdrop = new Graphics()
       .rect(-pad, -pad, size + pad * 2, size + pad * 2)
-      .fill(0x05070b);
+      // Water, not void. Every home pad is on the rim, so this is on screen at
+      // every spawn — a black surround made the whole game feel like it was
+      // happening at night.
+      .fill(0x2f6b8f);
     this.terrainLayer.addChild(backdrop);
 
     const g = new Graphics();
-    g.rect(0, 0, size, size).fill(0x11161f);
 
-    // Zone rings, so the contested centre reads at a glance.
+    // A bright mown-field checker, not a dark void. The arena used to be almost
+    // black, which made every tinted sprite on top of it read as gloomy no
+    // matter how the sprites themselves were lit — the floor sets the mood for
+    // everything standing on it. Two close greens in a 2-tile check give the
+    // ground readable scale as you move without turning into a busy pattern.
+    g.rect(0, 0, size, size).fill(0x6bbf59);
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        if (((x >> 1) + (y >> 1)) % 2 === 0) g.rect(x, y, 1, 1).fill(0x63b552);
+      }
+    }
+
+    // Zone rings, so the contested centre reads at a glance. Warm and subtle:
+    // they should say "this is the middle", not repaint the field.
     const c = size / 2;
-    g.circle(c, c, MAP.zoneRadii[2]!).fill({ color: 0x141b26, alpha: 1 });
-    g.circle(c, c, MAP.zoneRadii[1]!).fill({ color: 0x18202e, alpha: 1 });
-    g.circle(c, c, MAP.zoneRadii[0]!).fill({ color: 0x1d2736, alpha: 1 });
+    g.circle(c, c, MAP.zoneRadii[2]!).fill({ color: 0xffffff, alpha: 0.05 });
+    g.circle(c, c, MAP.zoneRadii[1]!).fill({ color: 0xffe27a, alpha: 0.07 });
+    g.circle(c, c, MAP.zoneRadii[0]!).fill({ color: 0xffe27a, alpha: 0.1 });
 
     for (let y = 0; y < size; y++) {
       for (let x = 0; x < size; x++) {
-        if (tiles[y * size + x] === TILE_WALL) {
-          g.rect(x, y, 1, 1).fill(0x39445a);
+        const t = tiles[y * size + x];
+        if (t === TILE_WALL) {
+          // Rock, with a lighter top edge so the wall reads as having height.
+          g.rect(x, y, 1, 1).fill(0x8d7c68);
+          g.rect(x, y, 1, 0.28).fill(0xa89684);
+        } else if (t === TILE_GRASS) {
+          // Tall grass: darker and cooler than the mown field, so the slow
+          // zones are obvious before you walk into one.
+          g.rect(x, y, 1, 1).fill(0x3f8f46);
         }
       }
     }
@@ -157,8 +179,19 @@ export class Scene {
     // the backdrop rather than fading into it.
     const rim = new Graphics()
       .rect(0, 0, size, size)
-      .stroke({ color: 0x55658a, width: 0.5, alignment: 1 });
+      .stroke({ color: 0xe0d5a8, width: 0.6, alignment: 1 });
     this.terrainLayer.addChild(rim);
+  }
+
+  /**
+   * World position -> CSS pixel position, for DOM chrome that has to track
+   * something in the arena (the gem tag over your character).
+   */
+  worldToScreen(x: number, y: number): { x: number; y: number } {
+    return {
+      x: this.world.position.x + x * this.world.scale.x,
+      y: this.world.position.y + y * this.world.scale.y,
+    };
   }
 
   private takeShadow(): Sprite {
@@ -295,6 +328,26 @@ export class Scene {
         s.tint = 0xffc857;
         s.width = s.height = 1.05;
         break;
+      case 'coin': {
+        // Same faceted shape as a gem but gold and smaller: the two are read at
+        // a glance by colour, and the size difference reinforces which one is
+        // score and which is change.
+        const coinPulse = 1 + Math.sin(this.time * 6 + e.id) * 0.08;
+        s.texture = this.atlas.gem;
+        s.tint = 0xffc93c;
+        s.width = s.height = 0.4 * coinPulse;
+        break;
+      }
+      case 'tree':
+        s.texture = this.atlas.node;
+        s.tint = 0x3f9142;
+        s.width = s.height = 1.45;
+        break;
+      case 'field':
+        s.texture = this.atlas.prop;
+        s.tint = 0xe8963c;
+        s.width = s.height = 1.0;
+        break;
       case 'hatchling':
         // Hatchling Run's rescue objective. Reuses the Fowl model, warm-tinted
         // and small, so it reads as "a little one of those" without a
@@ -355,9 +408,12 @@ export class Scene {
     let bob = 0;
     if (e.kind === 'unit' || e.kind === 'creep') {
       bob = Math.sin(this.time * 4 + e.id * 1.7) * size * 0.045;
-    } else if (e.kind === 'gem') {
+    } else if (e.kind === 'gem' || e.kind === 'coin') {
       bob = Math.sin(this.time * 5 + e.id) * 0.09;
       s.rotation = Math.sin(this.time * 2.2 + e.id) * 0.25;
+    } else if (e.kind === 'tree') {
+      // Trees sway rather than bob — they are rooted.
+      s.rotation = Math.sin(this.time * 1.1 + e.id) * 0.05;
     } else if (e.kind === 'chest') {
       bob = Math.sin(this.time * 2.4 + e.id) * 0.05;
     } else if (e.kind === 'hatchling') {

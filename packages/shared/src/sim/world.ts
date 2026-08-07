@@ -13,7 +13,8 @@
 
 import { MATCH, TICK_DT, type Phase } from '../config/match.ts';
 import { DEFAULT_MODE, GAME_MODES, type GameMode, type GameModeId } from '../config/modes.ts';
-import { MAP, zoneAt, zoneYieldMultiplier } from '../config/map.ts';
+import { MAP_IDS, type MapId } from '../config/maps.ts';
+import { GRASS_SPEED_MULT, MAP, zoneAt, zoneYieldMultiplier } from '../config/map.ts';
 import {
   STARTER_UNIT_TYPES,
   UNIT_DEFS,
@@ -25,6 +26,7 @@ import { clamp, distanceSq, normalizeInto, type Vec2 } from '../math/vec2.ts';
 import { NO_AURAS, applyHpAura, squadAuras, type SquadAuras } from './auras.ts';
 import { updateSummons } from './summons.ts';
 import {
+  applyDamage,
   decaySlow,
   resolveAttack,
   resolveHealing,
@@ -34,7 +36,7 @@ import {
 import { TEAM_NEUTRAL, EntityStore, type Entity, type EntityId } from './entities.ts';
 import { assignSlots, separate, slotPosition, steerToSlot, unitMoveSpeed } from './formation.ts';
 import { applyFusions, type FusionResult } from './fusion.ts';
-import { findOpenTile, generateMap, isWallAt, type GeneratedMap } from './mapgen.ts';
+import { buildArena, findOpenTile, isGrassAt, isWallAt, type GeneratedMap } from './mapgen.ts';
 import {
   CREEP_DAMAGE,
   CREEP_INTERVAL,
@@ -42,7 +44,9 @@ import {
   chestPool,
   populateArena,
   spawnChest,
+  spawnCoin,
   spawnCreep,
+  spawnFarmable,
   spawnGem,
   spawnHatchling,
   spawnLeader,
@@ -61,6 +65,8 @@ export interface InputCommand {
   chestChoice?: number;
   /** Set when the player picks their starting character during the draft. */
   draftChoice?: number;
+  /** Set on the tick the player taps dash. Ignored while on cooldown. */
+  dash?: boolean;
 }
 
 export interface PlayerState {
@@ -69,6 +75,8 @@ export interface PlayerState {
   name: string;
   leaderId: EntityId;
   gems: number;
+  /** Spending money. Buys chests; never counts toward score. */
+  coins: number;
   chestsOpened: number;
   nextChestPrice: number;
   respawnIn: number;
@@ -93,12 +101,17 @@ export interface PlayerState {
   eliminated: boolean;
   /** Collectibles this player has recovered, in modes that have them. */
   rescued: number;
+  /** Seconds until dash is available again, and how long the burst has left. */
+  dashCooldown: number;
+  dashRemaining: number;
 }
 
 export type WorldEvent =
   | { t: 'hit'; x: number; y: number; targetId: EntityId; amount: number }
   | { t: 'death'; x: number; y: number; id: EntityId; kind: string }
   | { t: 'gem'; x: number; y: number; player: PlayerId; value: number }
+  | { t: 'coin'; x: number; y: number; player: PlayerId; value: number }
+  | { t: 'dash'; x: number; y: number; player: PlayerId }
   | { t: 'fusion'; x: number; y: number; player: PlayerId; unit: UnitType; tier: UnitTier }
   | { t: 'chestOffer'; player: PlayerId; options: UnitType[]; price: number }
   | { t: 'chestOpen'; x: number; y: number; player: PlayerId; unit: UnitType }
@@ -121,6 +134,7 @@ export class World {
   readonly map: GeneratedMap;
 
   readonly mode: GameMode;
+  readonly mapId: MapId;
 
   tickNumber = 0;
   /** Seconds elapsed in the match. */
@@ -144,12 +158,21 @@ export class World {
   /** Squad aura totals, recomputed each tick alongside `squads`. */
   private readonly auras = new Map<PlayerId, SquadAuras>();
   private nodeRespawns: { x: number; y: number; in: number }[] = [];
+  private farmRespawns: { x: number; y: number; kind: 'tree' | 'field'; in: number }[] = [];
   private chestRespawns: { x: number; y: number; in: number }[] = [];
 
-  constructor(seed: number, playerCount: number, modeId: GameModeId = DEFAULT_MODE) {
+  constructor(
+    seed: number,
+    playerCount: number,
+    modeId: GameModeId = DEFAULT_MODE,
+    mapId?: MapId,
+  ) {
     this.rng = new Rng(seed);
     this.mode = GAME_MODES[modeId];
-    this.map = generateMap(this.rng, playerCount);
+    // One of five fixed arenas. Drawn from the match seed when the caller does
+    // not name one, so a replay of the same seed lands on the same ground.
+    this.mapId = mapId ?? MAP_IDS[this.rng.int(0, MAP_IDS.length)]!;
+    this.map = buildArena(this.mapId, playerCount);
     const populated = populateArena(this.store, this.map.tiles, this.rng);
     this.camps = populated.camps;
     this.chestSpots = populated.chestSpots;
@@ -175,6 +198,7 @@ export class World {
       name,
       leaderId: leader.id,
       gems: MATCH.startingGems,
+      coins: MATCH.startingCoins,
       chestsOpened: 0,
       nextChestPrice: MATCH.chestBasePrice,
       respawnIn: 0,
@@ -193,6 +217,8 @@ export class World {
       starterType: null,
       eliminated: false,
       rescued: 0,
+      dashCooldown: 0,
+      dashRemaining: 0,
     };
     this.players.set(id, state);
     leader.alliance = state.alliance;
@@ -356,6 +382,8 @@ export class World {
     this.updateFormations(dt);
     // 4 + 5. Acquire targets, resolve attacks and healing
     this.resolveCombat(dt);
+    // 5a. Leaders chip away at scenery they are standing on.
+    this.resolveLeaderHarvest(dt);
     // 5b. Summoners field their helpers.
     this.resolveSummons(dt);
     // 6. Resolve deaths, drop gems
@@ -472,6 +500,11 @@ export class World {
     }
   }
 
+  /** Speed multiplier for whatever is underfoot at this position. */
+  private terrainMultAt(x: number, y: number): number {
+    return isGrassAt(this.map.tiles, x, y, this.map.size) ? GRASS_SPEED_MULT : 1;
+  }
+
   /** Recompute each squad's aura totals and apply the HP aura to its members. */
   private refreshAuras(): void {
     for (const player of this.players.values()) {
@@ -485,6 +518,48 @@ export class World {
   /** Auras for a player, or the neutral defaults if they have no squad yet. */
   aurasOf(playerId: PlayerId): SquadAuras {
     return this.auras.get(playerId) ?? NO_AURAS;
+  }
+
+  /**
+   * Leaders break crates and ore they walk into.
+   *
+   * Crates and ore only — never units or creeps, so the rule that leaders do
+   * not fight (§1.7) still holds; and never trees or fields, so drafting the
+   * Supplier who can work those remains a real decision.
+   */
+  private resolveLeaderHarvest(dt: number): void {
+    for (const player of this.players.values()) {
+      if (player.wiped || player.eliminated) continue;
+      const leader = this.leaderOf(player);
+      if (!leader) continue;
+
+      leader.cooldown -= dt;
+      if (leader.cooldown > 0) continue;
+
+      let best: Entity | null = null;
+      let bestDistSq = Number.MAX_VALUE;
+      for (const e of this.store.items) {
+        if (!e.alive || e.hp <= 0) continue;
+        if (e.kind !== 'prop' && e.kind !== 'node') continue;
+        const reach = MATCH.leaderHarvestRange + e.radius + leader.radius;
+        const dSq = distanceSq(leader.x, leader.y, e.x, e.y);
+        if (dSq > reach * reach || dSq >= bestDistSq) continue;
+        bestDistSq = dSq;
+        best = e;
+      }
+      if (!best) continue;
+
+      leader.cooldown = MATCH.leaderHarvestInterval;
+      const killed = applyDamage(best, MATCH.leaderHarvestDamage);
+      this.damageBuf.push({
+        sourceId: leader.id,
+        targetId: best.id,
+        amount: MATCH.leaderHarvestDamage,
+        killed,
+        x: best.x,
+        y: best.y,
+      });
+    }
   }
 
   private resolveSummons(dt: number): void {
@@ -505,6 +580,13 @@ export class World {
 
   private applyInputs(inputs: Map<PlayerId, InputCommand>, dt: number): void {
     for (const player of this.players.values()) {
+      // Dash timers run for everyone, every tick, before the early exits below.
+      // Ticking them further down would freeze the cooldown while a player is
+      // wiped or momentarily has no input, and they would respawn holding a
+      // dash they should have been recharging through.
+      player.dashCooldown = Math.max(0, player.dashCooldown - dt);
+      player.dashRemaining = Math.max(0, player.dashRemaining - dt);
+
       const leader = this.leaderOf(player);
       if (!leader) continue;
 
@@ -517,7 +599,23 @@ export class World {
       player.lastAckSeq = input.seq;
 
       normalizeInto(scratchVec, input.dirX, input.dirY);
-      const speed = MATCH.leaderSpeed * (1 + this.aurasOf(player.id).speedBonus);
+
+      // Dash. Tapping it starts a short burst in the direction you are already
+      // heading; it is a commitment, not a teleport, so it cannot be used to
+      // cross a wall and it does not change where you were going.
+      if (input.dash && player.dashCooldown <= 0 && (scratchVec.x !== 0 || scratchVec.y !== 0)) {
+        player.dashRemaining = MATCH.dashSeconds;
+        player.dashCooldown = MATCH.dashCooldownSeconds;
+        this.events.push({ t: 'dash', x: leader.x, y: leader.y, player: player.id });
+      }
+
+      const dashMult = player.dashRemaining > 0 ? MATCH.dashSpeed : 1;
+      // Grass drags on the leader as well as the squad, so wading through it is
+      // a real routing decision rather than something only the AI-driven
+      // followers have to care about.
+      const terrain = this.terrainMultAt(leader.x, leader.y);
+      const speed =
+        MATCH.leaderSpeed * (1 + this.aurasOf(player.id).speedBonus) * dashMult * terrain;
 
       leader.vx = scratchVec.x * speed;
       leader.vy = scratchVec.y * speed;
@@ -598,7 +696,12 @@ export class World {
           continue;
         }
         slotPosition(scratchSlot, leader.x, leader.y, player.facing, unit.slot);
-        const speed = unitMoveSpeed(unit, baseSpeed, squadSpeedBonus);
+        const speed = unitMoveSpeed(
+          unit,
+          baseSpeed,
+          squadSpeedBonus,
+          this.terrainMultAt(unit.x, unit.y),
+        );
         steerToSlot(unit, scratchSlot.x, scratchSlot.y, speed);
         this.moveWithCollision(unit, dt);
       }
@@ -691,11 +794,17 @@ export class World {
       // §1.5: the Supplier bonus applies to harvested nodes and props, not to
       // kills — otherwise an economy squad would also be paid for winning
       // fights it is deliberately bad at.
-      if (owner && (source.kind === 'node' || source.kind === 'prop')) {
+      const harvested =
+        source.kind === 'node' ||
+        source.kind === 'prop' ||
+        source.kind === 'tree' ||
+        source.kind === 'field';
+      if (owner && harvested) {
         base *= this.aurasOf(owner.id).gemMultiplier;
       }
     }
 
+    base *= this.mode.economyScale;
     if (this.phase === 'lastCall') base *= MATCH.lastCallMultiplier;
     return Math.max(1, Math.round(base));
   }
@@ -715,17 +824,28 @@ export class World {
 
     for (const e of this.store.items) {
       if (!e.alive || e.hp > 0) continue;
-      if (e.kind === 'leader' || e.kind === 'gem' || e.kind === 'chest') continue;
+      if (e.kind === 'leader' || e.kind === 'gem' || e.kind === 'coin') continue;
+      if (e.kind === 'chest' || e.kind === 'hatchling') continue;
 
       const killerTeam = killerByTarget.get(e.id) ?? TEAM_NEUTRAL;
       this.events.push({ t: 'death', x: e.x, y: e.y, id: e.id, kind: e.kind });
 
-      if (e.kind === 'prop' || e.kind === 'node' || e.kind === 'creep') {
-        const value = this.gemValueFor(e, killerTeam);
-        this.scatterGems(e.x, e.y, value);
+      // Narrowed to the literal union so the respawn record stays typed.
+      const farmKind: 'tree' | 'field' | null =
+        e.kind === 'tree' ? 'tree' : e.kind === 'field' ? 'field' : null;
+      const farmable = farmKind !== null;
+      if (e.kind === 'prop' || e.kind === 'node' || e.kind === 'creep' || farmable) {
+        // Farmables burst wider — they pay several times a crate, and the drop
+        // should look like the haul it is.
+        const spread = farmable ? 1.5 : 0.7;
+        this.scatterGems(e.x, e.y, this.gemValueFor(e, killerTeam), spread);
+        this.scatterCoins(e.x, e.y, this.coinValueFor(e), spread + 0.3);
 
         if (e.kind === 'node') {
           this.nodeRespawns.push({ x: e.x, y: e.y, in: MAP.resourceRespawnSeconds });
+        }
+        if (farmKind) {
+          this.farmRespawns.push({ x: e.x, y: e.y, kind: farmKind, in: MAP.farmRespawnSeconds });
         }
         if (e.kind === 'creep') this.checkCampCleared(e.campId, killerTeam);
       }
@@ -734,19 +854,52 @@ export class World {
     }
   }
 
-  /** Split a payout into individual gem pickups so collecting feels physical. */
-  private scatterGems(x: number, y: number, total: number, spread = 0.6): void {
+  /**
+   * Split a payout into individual pickups so collecting feels physical.
+   *
+   * Deliberately more, smaller drops than the payout strictly needs: a smashed
+   * crate that bursts into a scatter of pickups reads as a reward, where one
+   * lump reads as a counter ticking up.
+   */
+  private scatter(
+    kind: 'gem' | 'coin',
+    x: number,
+    y: number,
+    total: number,
+    spread: number,
+  ): void {
+    if (total <= 0) return;
     let remaining = total;
-    const count = clamp(Math.ceil(total / 3), 1, 6);
+    const count = clamp(Math.ceil(total / 2), 1, 9);
     for (let i = 0; i < count; i++) {
       const chunk = i === count - 1 ? remaining : Math.max(1, Math.round(total / count));
       remaining -= chunk;
       if (chunk <= 0) continue;
       const angle = this.rng.float() * Math.PI * 2;
       const dist = this.rng.float() * spread;
-      spawnGem(this.store, x + Math.cos(angle) * dist, y + Math.sin(angle) * dist, chunk);
+      const px = x + Math.cos(angle) * dist;
+      const py = y + Math.sin(angle) * dist;
+      if (kind === 'gem') spawnGem(this.store, px, py, chunk);
+      else spawnCoin(this.store, px, py, chunk);
       if (remaining <= 0) break;
     }
+  }
+
+  private scatterGems(x: number, y: number, total: number, spread = 0.7): void {
+    this.scatter('gem', x, y, total, spread);
+  }
+
+  private scatterCoins(x: number, y: number, total: number, spread = 0.9): void {
+    this.scatter('coin', x, y, total, spread);
+  }
+
+  /** Coins awarded for destroying `source`. Zone and last call apply; auras do not. */
+  private coinValueFor(source: Entity): number {
+    let base = source.coinValue;
+    if (base <= 0) return 0;
+    base *= zoneYieldMultiplier(zoneAt(source.x, source.y)) * this.mode.economyScale;
+    if (this.phase === 'lastCall') base *= MATCH.lastCallMultiplier;
+    return Math.max(1, Math.round(base));
   }
 
   private checkCampCleared(campId: number, killerTeam: number): void {
@@ -761,15 +914,19 @@ export class World {
     if (!camp) return;
     camp.respawnIn = MAP.creepCampRespawnSeconds;
 
-    let bonus = camp.bonus * zoneYieldMultiplier(zoneAt(camp.x, camp.y));
-    if (this.phase === 'lastCall') bonus *= MATCH.lastCallMultiplier;
+    const zone = zoneYieldMultiplier(zoneAt(camp.x, camp.y));
+    const mult = zone * this.mode.economyScale * (this.phase === 'lastCall' ? MATCH.lastCallMultiplier : 1);
     void killerTeam; // camp bonus is dropped as loot, not awarded directly
-    this.scatterGems(camp.x, camp.y, Math.round(bonus), 1.2);
+    this.scatterGems(camp.x, camp.y, Math.round(camp.bonus * mult), 1.2);
+    this.scatterCoins(camp.x, camp.y, Math.round(camp.coinBonus * mult), 1.4);
   }
 
   private resolvePickups(inputs: Map<PlayerId, InputCommand>, dt: number): void {
     for (const e of this.store.items) {
-      if (e.alive && e.kind === 'gem' && e.pickupDelay > 0) e.pickupDelay -= dt;
+      // Coins as well as gems. Ticking only gems left every dropped coin
+      // permanently un-collectible, so no player could ever afford a chest.
+      if (!e.alive || e.pickupDelay <= 0) continue;
+      if (e.kind === 'gem' || e.kind === 'coin') e.pickupDelay -= dt;
     }
 
     for (const player of this.players.values()) {
@@ -785,11 +942,13 @@ export class World {
       // chests was pure cost. The bench harness measured identical gross income
       // (~73 gems) for a bot that bought five chests and one that bought none.
       const leaderPickupSq = 1.1 * 1.1;
-      const unitPickupSq = 0.75 * 0.75;
+      const unitPickupSq = 0.95 * 0.95;
       const squad = this.squads.get(player.id) ?? [];
 
       for (const e of this.store.items) {
-        if (!e.alive || e.kind !== 'gem' || e.pickupDelay > 0) continue;
+        if (!e.alive || e.pickupDelay > 0) continue;
+        const isGem = e.kind === 'gem';
+        if (!isGem && e.kind !== 'coin') continue;
 
         let collected = distanceSq(leader.x, leader.y, e.x, e.y) <= leaderPickupSq;
         if (!collected) {
@@ -802,8 +961,13 @@ export class World {
         }
         if (!collected) continue;
 
-        player.gems += e.value;
-        this.events.push({ t: 'gem', x: e.x, y: e.y, player: player.id, value: e.value });
+        if (isGem) {
+          player.gems += e.value;
+          this.events.push({ t: 'gem', x: e.x, y: e.y, player: player.id, value: e.value });
+        } else {
+          player.coins += e.value;
+          this.events.push({ t: 'coin', x: e.x, y: e.y, player: player.id, value: e.value });
+        }
         this.store.despawn(e);
       }
 
@@ -820,7 +984,7 @@ export class World {
         if (!e.alive || e.kind !== 'chest') continue;
         const reach = leader.radius + e.radius + 0.3;
         if (distanceSq(leader.x, leader.y, e.x, e.y) > reach * reach) continue;
-        if (player.gems < this.chestPriceFor(player)) continue;
+        if (player.coins < this.chestPriceFor(player)) continue;
 
         const pool = chestPool(this.elapsed);
         const options: UnitType[] = [];
@@ -852,11 +1016,12 @@ export class World {
     player.offer = null;
     player.offerChestId = 0;
     if (!choice || !chest) return;
-    if (player.gems < price) return;
+    if (player.coins < price) return;
     if (this.squadSize(player.index) >= MATCH.squadCap) return;
 
-    // Spending is a real score sacrifice (§1.4) — gems leave the bank for good.
-    player.gems -= price;
+    // Coins, not gems. Buying a unit must never cost score, or every purchase
+    // is a self-inflicted setback and the whole economy reads as a trap.
+    player.coins -= price;
     player.chestsOpened += 1;
     player.nextChestPrice += MATCH.chestPriceStep;
 
@@ -871,7 +1036,7 @@ export class World {
     // move around the map over a match instead of becoming fixed camps.
     this.store.despawn(chest);
     const spot = this.rng.pick(this.chestSpots);
-    this.chestRespawns.push({ x: spot.x, y: spot.y, in: 12 });
+    this.chestRespawns.push({ x: spot.x, y: spot.y, in: 6 });
 
     const fusions: FusionResult[] = [];
     applyFusions(this.store, this.squadOf(player.index), fusions);
@@ -937,6 +1102,11 @@ export class World {
         loser.gems -= dropped;
         this.scatterGems(loserLeader.x, loserLeader.y, dropped, 1.8);
       }
+      const coinsDropped = Math.floor(loser.coins * MATCH.coinLossFraction);
+      if (coinsDropped > 0) {
+        loser.coins -= coinsDropped;
+        this.scatterCoins(loserLeader.x, loserLeader.y, coinsDropped, 2.1);
+      }
 
       if (winner) {
         this.events.push({
@@ -986,6 +1156,15 @@ export class World {
       if (r.in <= 0) {
         spawnNode(this.store, r.x, r.y);
         this.nodeRespawns.splice(i, 1);
+      }
+    }
+
+    for (let i = this.farmRespawns.length - 1; i >= 0; i--) {
+      const r = this.farmRespawns[i]!;
+      r.in -= dt;
+      if (r.in <= 0) {
+        spawnFarmable(this.store, r.kind, r.x, r.y);
+        this.farmRespawns.splice(i, 1);
       }
     }
 

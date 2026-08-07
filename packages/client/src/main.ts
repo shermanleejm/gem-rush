@@ -30,6 +30,7 @@ import {
   createStick,
   showJoin,
   showLobby,
+  createGemTag,
   showDraft,
   showModeCard,
   showResults,
@@ -50,6 +51,8 @@ const banner = createBanner();
 const audio = new Audio();
 
 let hud: HudHandle | null = null;
+let gemTag: ReturnType<typeof createGemTag> | null = null;
+let dashQueued = false;
 let lobby: LobbyHandle | null = null;
 let closeResults: (() => void) | null = null;
 let removeMute: (() => void) | null = null;
@@ -122,6 +125,8 @@ const listeners = {
     running = false;
     hud?.destroy();
     hud = null;
+    gemTag?.destroy();
+    gemTag = null;
     draft?.close();
     draft = null;
     closeModeCard?.();
@@ -200,7 +205,10 @@ async function startMatch(): Promise<void> {
   }
   applyPendingMap();
   scene.localTeam = conn.playerIndex;
-  hud ??= createHud();
+  hud ??= createHud(() => {
+    dashQueued = true;
+  });
+  gemTag ??= createGemTag();
   removeMute ??= createMuteButton(audio.isMuted, (m) => audio.setMuted(m));
   running = true;
 }
@@ -315,8 +323,9 @@ function frame(now: number): void {
     const step = 1 / INPUT_RATE;
     while (inputAcc >= step) {
       inputAcc -= step;
-      conn.sendInput(input.dirX, input.dirY, step, chestChoice);
+      conn.sendInput(input.dirX, input.dirY, step, chestChoice, dashQueued);
       chestChoice = undefined;
+      dashQueued = false;
     }
 
     conn.sample(view);
@@ -360,9 +369,21 @@ function frame(now: number): void {
       }
 
       hud.setTimer(conn.timeRemaining, conn.phase === 'lastCall');
-      hud.setGems(me?.g ?? 0);
+      hud.setCoins(me?.c ?? 0);
       hud.setSquad(squadSize, conn.config.squadCap);
       hud.setMode(mode.label);
+      hud.setDashCooldown(me?.dc ?? 0);
+
+      // Gem count rides above your own character.
+      if (gemTag) {
+        const anchor = predicted ?? serverLeader;
+        if (anchor) {
+          const p = scene.worldToScreen(anchor.x, anchor.y - 0.85);
+          gemTag.set(me?.g ?? 0, p.x, p.y);
+        } else {
+          gemTag.hide();
+        }
+      }
 
       // The scoreboard has to count whatever the mode counts. Showing gems in
       // Hatchling Run would rank players by an irrelevant number, and in duos

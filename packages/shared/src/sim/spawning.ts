@@ -6,7 +6,7 @@
  * rim from out-earning a fight for the middle (§4, known failure mode).
  */
 
-import { GEM_YIELD, MATCH } from '../config/match.ts';
+import { COIN_YIELD, GEM_YIELD, MATCH } from '../config/match.ts';
 import { MAP, zoneAt } from '../config/map.ts';
 import {
   PLAYABLE_UNIT_TYPES,
@@ -72,6 +72,7 @@ export function spawnProp(store: EntityStore, x: number, y: number): Entity {
   e.maxHp = PROP_HP;
   e.hp = PROP_HP;
   e.value = GEM_YIELD.prop;
+  e.coinValue = COIN_YIELD.prop;
   return e;
 }
 
@@ -84,6 +85,7 @@ export function spawnNode(store: EntityStore, x: number, y: number): Entity {
   e.maxHp = NODE_HP;
   e.hp = NODE_HP;
   e.value = GEM_YIELD.resourceNode;
+  e.coinValue = COIN_YIELD.resourceNode;
   return e;
 }
 
@@ -117,9 +119,36 @@ export function spawnCreep(
   e.hp = e.maxHp;
   // Tougher camps are worth more, so contesting the centre pays for its risk.
   e.value = Math.max(1, Math.round(GEM_YIELD.creep * strength));
+  e.coinValue = Math.max(1, Math.round(COIN_YIELD.creep * strength));
   e.campId = campId;
   e.unitType = 'brute'; // creeps reuse the Brute attack profile
   e.tier = 0;
+  return e;
+}
+
+export const TREE_HP = 90;
+export const FIELD_HP = 60;
+
+/**
+ * A farmable. Worth several times a crate, but only the matching specialist can
+ * touch it — so these are the reason to draft a Supplier rather than a
+ * percentage that quietly accrues.
+ */
+export function spawnFarmable(
+  store: EntityStore,
+  kind: 'tree' | 'field',
+  x: number,
+  y: number,
+): Entity {
+  const e = store.spawn(kind);
+  e.x = x;
+  e.y = y;
+  e.team = TEAM_NEUTRAL;
+  e.radius = kind === 'tree' ? 0.5 : 0.45;
+  e.maxHp = kind === 'tree' ? TREE_HP : FIELD_HP;
+  e.hp = e.maxHp;
+  e.value = kind === 'tree' ? GEM_YIELD.tree : GEM_YIELD.field;
+  e.coinValue = kind === 'tree' ? COIN_YIELD.tree : COIN_YIELD.field;
   return e;
 }
 
@@ -144,6 +173,24 @@ export function spawnHatchling(store: EntityStore, x: number, y: number): Entity
   e.maxHp = 1;
   e.hp = 1;
   e.value = 1;
+  return e;
+}
+
+/** A dropped coin: spending money, never score. */
+export function spawnCoin(
+  store: EntityStore,
+  x: number,
+  y: number,
+  value: number,
+  pickupDelay = 0.25,
+): Entity {
+  const e = store.spawn('coin');
+  e.x = x;
+  e.y = y;
+  e.team = TEAM_NEUTRAL;
+  e.radius = 0.24;
+  e.value = value;
+  e.pickupDelay = pickupDelay;
   return e;
 }
 
@@ -208,6 +255,7 @@ export interface CreepCamp {
   respawnIn: number;
   /** Bonus paid once when the last creep in the camp dies. */
   bonus: number;
+  coinBonus: number;
   /** Zone-derived difficulty multiplier, reused when the camp respawns. */
   strength: number;
 }
@@ -240,6 +288,7 @@ export function populateArena(
       y: spot.y,
       respawnIn: 0,
       bonus: Math.round(GEM_YIELD.creepCampBonus * strength),
+      coinBonus: Math.round(COIN_YIELD.creepCampBonus * strength),
       strength,
     });
     for (let k = 0; k < MAP.creepsPerCamp; k++) {
@@ -248,6 +297,15 @@ export function populateArena(
       const cy = spot.y + Math.sin(angle) * 0.9;
       spawnCreep(store, cx, cy, c, strength);
     }
+  }
+
+  for (let i = 0; i < MAP.trees; i++) {
+    const spot = centreBiasedSpot(tiles, rng, size, 1.2, store);
+    spawnFarmable(store, 'tree', spot.x, spot.y);
+  }
+  for (let i = 0; i < MAP.fields; i++) {
+    const spot = centreBiasedSpot(tiles, rng, size, 1.2, store);
+    spawnFarmable(store, 'field', spot.x, spot.y);
   }
 
   const chestSpots: { x: number; y: number }[] = [];

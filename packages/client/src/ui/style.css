@@ -259,6 +259,153 @@ button.secondary {
   font-weight: 600;
 }
 
+/* ── HUD, laid out to the reference: rank top-left over a short ladder, clock
+   top-centre, coins top-right, dash bottom-right. ─────────────────────────── */
+
+.rankbox {
+  position: absolute;
+  top: max(8px, env(safe-area-inset-top));
+  left: max(10px, env(safe-area-inset-left));
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.rank-big {
+  font-size: 46px;
+  font-weight: 900;
+  line-height: 0.9;
+  letter-spacing: -0.03em;
+  color: #ffe27a;
+  /* Heavy outline: this sits over a bright field and has to stay legible on
+     any tile it happens to overlap. */
+  -webkit-text-stroke: 3px rgba(24, 18, 8, 0.85);
+  paint-order: stroke fill;
+}
+
+.ladder {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.ladder-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 9px 3px 5px;
+  border-radius: 999px;
+  background: rgba(13, 17, 25, 0.62);
+  font-size: 12px;
+  font-weight: 600;
+  min-width: 132px;
+}
+
+.ladder-row.me {
+  background: rgba(13, 17, 25, 0.86);
+  box-shadow: inset 0 0 0 1.5px var(--accent);
+}
+
+.ladder-row.out {
+  opacity: 0.45;
+}
+
+.ladder-row .pos {
+  width: 15px;
+  text-align: center;
+  color: var(--ink-dim);
+}
+
+.ladder-row .nm {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 92px;
+}
+
+.ladder-row .g {
+  color: var(--gem);
+  font-weight: 700;
+}
+
+.hud-topright {
+  position: absolute;
+  top: max(10px, env(safe-area-inset-top));
+  right: max(10px, env(safe-area-inset-right));
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-end;
+}
+
+.pill.coins {
+  color: #ffc93c;
+  font-size: 17px;
+}
+
+.pill.squad {
+  font-size: 13px;
+  color: var(--ink-dim);
+}
+
+/* Dash. Big enough for a thumb, bottom-right where a thumb already is. */
+.dash {
+  position: absolute;
+  right: max(14px, env(safe-area-inset-right));
+  bottom: max(20px, env(safe-area-inset-bottom));
+  width: 78px;
+  height: 78px;
+  padding: 0;
+  border-radius: 50%;
+  border: 3px solid rgba(255, 255, 255, 0.5);
+  background: #2f7fd6;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  pointer-events: auto;
+  overflow: hidden;
+  z-index: 6;
+}
+
+.dash span {
+  position: relative;
+  z-index: 1;
+}
+
+.dash.ready {
+  background: #3f9bff;
+  box-shadow: 0 0 0 4px rgba(63, 155, 255, 0.25);
+}
+
+/* The sweep fills from the bottom as the cooldown burns off, so "how long
+   until I can dash" is readable without a number. */
+.dash-sweep {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 100%;
+  background: rgba(6, 12, 22, 0.62);
+  transition: height 90ms linear;
+  z-index: 0;
+}
+
+/* Gem count pinned over your own leader, so score is where your eyes already
+   are rather than in a corner. */
+.gemtag {
+  position: absolute;
+  transform: translate(-50%, -100%);
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: rgba(13, 17, 25, 0.82);
+  color: var(--gem);
+  font-size: 14px;
+  font-weight: 800;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
 /* Opening character draft.
    Sits over the arena rather than replacing it, so the map is visible while
    choosing. Cards wrap on narrow screens: three side by side at 108px each is

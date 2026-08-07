@@ -8,6 +8,7 @@
 
 import type { MatchConfig } from '../config/match.ts';
 import type { GameModeId } from '../config/modes.ts';
+import type { MapId } from '../config/maps.ts';
 import type { UnitTier, UnitType } from '../config/units.ts';
 import type { EntityId } from '../sim/entities.ts';
 import type { PlayerId, WorldEvent } from '../sim/world.ts';
@@ -69,6 +70,8 @@ export interface LobbyMsg {
 
 export interface StartMsg {
   t: 'start';
+  /** Which of the five fixed arenas this match is on. */
+  map: MapId;
   seed: number;
   tick0: number;
   playerCount: number;
@@ -100,6 +103,10 @@ export interface EntityWire {
 export interface PlayerWire {
   id: PlayerId;
   g: number;
+  /** Coins: spending money, shown top-right. */
+  c: number;
+  /** Dash cooldown as 0..1, where 0 is ready. */
+  dc: number;
   /** Next chest price for this player. */
   p: number;
   wiped: boolean;

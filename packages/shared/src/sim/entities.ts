@@ -19,8 +19,11 @@ export const ENTITY_KINDS = [
   'creep',
   'prop',
   'node',
+  'tree',
+  'field',
   'chest',
   'gem',
+  'coin',
   'hatchling',
 ] as const;
 export type EntityKind = (typeof ENTITY_KINDS)[number];
@@ -85,8 +88,14 @@ export interface Entity {
   lastDamagedAt: number;
 
   // ── gem / pickup ────────────────────────────────────────────────────────
-  /** Gem value, or chest price. */
+  /** Gem value for a destructible, or the pickup's own value once dropped. */
   value: number;
+  /**
+   * Coins this destructible pays out. Separate from `value` because the two
+   * currencies are tuned independently — a resource node is worth more coins
+   * than gems, a creep camp the reverse.
+   */
+  coinValue: number;
   /** Seconds until a consumed node or camp comes back. */
   respawnIn: number;
   /** Small delay before a dropped gem can be picked up, so it isn't instant. */
@@ -125,6 +134,7 @@ function blankEntity(id: EntityId): Entity {
     lastHealedAt: -1,
     lastDamagedAt: -999,
     value: 0,
+    coinValue: 0,
     respawnIn: 0,
     pickupDelay: 0,
     campId: -1,
