@@ -25,7 +25,6 @@ import type { BufferGeometry } from 'three';
 import {
   AmbientLight,
   BoxGeometry,
-  CapsuleGeometry,
   ConeGeometry,
   CylinderGeometry,
   DirectionalLight,
@@ -43,6 +42,7 @@ import {
 } from 'three';
 
 import { UNIT_TYPES, type UnitType } from '@gem-rush/shared';
+import { bodyMat, buildUnitModel, darkMat, gemMat, trimMat } from './models.ts';
 import { Texture } from 'pixi.js';
 
 /** Baked texture size. Sprites draw around 30-45px, so this has headroom. */
@@ -65,13 +65,10 @@ export type SpriteKey =
 export type SpriteAtlas = Record<SpriteKey, Texture>;
 
 // ── materials ───────────────────────────────────────────────────────────────
-// Near-white so the per-team tint lands cleanly. Roughness varies per surface
-// so metal, stone and crystal still read differently once tinted.
+// Unit materials are shared with the recipe system in models.ts, so a unit and
+// a world prop lit side by side agree about what a surface is. Only the rough
+// crate/chest timber is local, since nothing else uses it.
 
-const bodyMat = new MeshStandardMaterial({ color: 0xf2f2f2, roughness: 0.62, metalness: 0.06 });
-const darkMat = new MeshStandardMaterial({ color: 0x5a5a5a, roughness: 0.5, metalness: 0.15 });
-const trimMat = new MeshStandardMaterial({ color: 0x8f8f8f, roughness: 0.35, metalness: 0.35 });
-const gemMat = new MeshStandardMaterial({ color: 0xffffff, roughness: 0.12, metalness: 0.1 });
 const woodMat = new MeshStandardMaterial({ color: 0xe8e8e8, roughness: 0.85, metalness: 0.0 });
 
 function mesh(geo: BufferGeometry, mat: MeshStandardMaterial): Mesh {
@@ -81,115 +78,6 @@ function mesh(geo: BufferGeometry, mat: MeshStandardMaterial): Mesh {
 // ── models ──────────────────────────────────────────────────────────────────
 // Each returns a Group centred on the origin, roughly 1.6 units tall so it
 // frames consistently. Role is carried by silhouette first, as before.
-
-function striker(): Group {
-  const g = new Group();
-  const body = mesh(new CapsuleGeometry(0.42, 0.42, 6, 16), bodyMat);
-  g.add(body);
-  // A blade angled across the body: aggressive read at a glance.
-  const blade = mesh(new BoxGeometry(0.13, 0.95, 0.07), darkMat);
-  blade.position.set(0.42, 0.12, 0.34);
-  blade.rotation.z = -0.5;
-  g.add(blade);
-  return g;
-}
-
-function marksman(): Group {
-  const g = new Group();
-  g.add(mesh(new CapsuleGeometry(0.34, 0.42, 6, 16), bodyMat));
-  // A chunky barrel held out to the side. Thin and tucked against the body it
-  // baked down to a dark stripe; at this thickness and offset it stays a
-  // recognisable protruding gun even when the sprite is tiny.
-  const barrel = mesh(new CylinderGeometry(0.13, 0.13, 1.15, 12), darkMat);
-  barrel.rotation.set(Math.PI / 2, 0, 0);
-  barrel.position.set(0.34, 0.06, 0.5);
-  g.add(barrel);
-  const scope = mesh(new SphereGeometry(0.16, 12, 10), trimMat);
-  scope.position.set(0.34, 0.34, 0.06);
-  g.add(scope);
-  return g;
-}
-
-function guard(): Group {
-  const g = new Group();
-  const body = mesh(new CylinderGeometry(0.44, 0.5, 0.82, 14), bodyMat);
-  g.add(body);
-  // A broad shield slab out front: the tank silhouette.
-  const shield = mesh(new BoxGeometry(1.0, 0.9, 0.16), trimMat);
-  shield.position.set(0, 0.06, 0.46);
-  g.add(shield);
-  const boss = mesh(new SphereGeometry(0.17, 14, 12), darkMat);
-  boss.position.set(0, 0.06, 0.6);
-  g.add(boss);
-  return g;
-}
-
-function mender(): Group {
-  const g = new Group();
-  g.add(mesh(new SphereGeometry(0.44, 18, 14), bodyMat));
-  // A big floating cross — support reads instantly, but only if the cross is
-  // large enough to survive being drawn 35px wide, so it is deliberately
-  // oversized relative to the body rather than a tasteful little emblem.
-  const barA = mesh(new BoxGeometry(0.82, 0.22, 0.22), trimMat);
-  barA.position.y = 0.72;
-  const barB = mesh(new BoxGeometry(0.22, 0.82, 0.22), trimMat);
-  barB.position.y = 0.72;
-  g.add(barA, barB);
-  return g;
-}
-
-function blaster(): Group {
-  const g = new Group();
-  g.add(mesh(new SphereGeometry(0.44, 18, 14), bodyMat));
-  // A ring of orbiting charges — the AoE read.
-  for (let i = 0; i < 4; i++) {
-    const a = (i / 4) * Math.PI * 2;
-    const orb = mesh(new SphereGeometry(0.16, 12, 10), darkMat);
-    orb.position.set(Math.cos(a) * 0.62, 0.18, Math.sin(a) * 0.62);
-    g.add(orb);
-  }
-  return g;
-}
-
-function harvester(): Group {
-  const g = new Group();
-  g.add(mesh(new BoxGeometry(0.78, 0.7, 0.78), bodyMat));
-  // Carrying a gem: the economy unit, labelled by what it holds.
-  const carried = mesh(new OctahedronGeometry(0.3), gemMat);
-  carried.position.y = 0.66;
-  carried.rotation.y = 0.6;
-  g.add(carried);
-  return g;
-}
-
-function scout(): Group {
-  const g = new Group();
-  // A dart laid almost flat and pointing forward. Stood upright it just read as
-  // a teardrop from this camera; near-horizontal, the taper is visible and the
-  // silhouette says "fast" before the colour says anything.
-  const body = mesh(new ConeGeometry(0.36, 1.15, 14), bodyMat);
-  body.rotation.x = Math.PI / 2;
-  g.add(body);
-  // Swept tail fins, well clear of the body so they survive at sprite size.
-  for (const sx of [-1, 1]) {
-    const fin = mesh(new BoxGeometry(0.46, 0.1, 0.34), trimMat);
-    fin.position.set(0.28 * sx, 0, -0.4);
-    fin.rotation.y = -0.5 * sx;
-    g.add(fin);
-  }
-  return g;
-}
-
-function warden(): Group {
-  const g = new Group();
-  g.add(mesh(new CylinderGeometry(0.42, 0.42, 0.72, 6), bodyMat));
-  // A containment ring: the control archetype.
-  const ring = mesh(new TorusGeometry(0.56, 0.09, 10, 20), trimMat);
-  ring.rotation.x = Math.PI / 2;
-  ring.position.y = 0.34;
-  g.add(ring);
-  return g;
-}
 
 function leaderModel(): Group {
   const g = new Group();
@@ -272,17 +160,6 @@ function chestModel(): Group {
   g.add(lock);
   return g;
 }
-
-const UNIT_MODELS: Record<UnitType, () => Group> = {
-  striker,
-  marksman,
-  guard,
-  mender,
-  blaster,
-  harvester,
-  scout,
-  warden,
-};
 
 // ── baking ──────────────────────────────────────────────────────────────────
 
@@ -493,7 +370,7 @@ export function buildSpriteAtlas(): SpriteAtlas {
 
   const atlas = {} as SpriteAtlas;
   for (const type of UNIT_TYPES) {
-    atlas[type] = bakeModel(renderer, scene, camera, UNIT_MODELS[type]());
+    atlas[type] = bakeModel(renderer, scene, camera, buildUnitModel(type));
   }
   atlas.leader = bakeModel(renderer, scene, camera, leaderModel());
   atlas.creep = bakeModel(renderer, scene, camera, creepModel());

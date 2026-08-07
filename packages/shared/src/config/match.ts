@@ -15,7 +15,17 @@ export interface MatchConfig {
   lastCallMultiplier: number;
   squadCap: number;
   startingGems: number;
-  startingSquad: { type: string; count: number }[];
+  /**
+   * Units granted once the opening draft resolves. One, of the character the
+   * player picked — the whole point of the draft is that your first unit is a
+   * decision rather than a default, so handing out two of something would
+   * dilute it before the match starts.
+   */
+  startingUnitCount: number;
+  /** Seconds players get to pick their starting character before auto-pick. */
+  draftSeconds: number;
+  /** How many characters the opening draft offers. */
+  draftOfferCount: number;
   chestBasePrice: number;
   /** Added to that player's next chest price each time they buy (§1.4). */
   chestPriceStep: number;
@@ -23,8 +33,8 @@ export interface MatchConfig {
   fusionThreshold: number;
   /** Seconds before a wiped squad respawns at its home pad. */
   respawnSeconds: number;
-  /** Free units granted on respawn. */
-  respawnSquad: { type: string; count: number }[];
+  /** Free copies of the player's starting character granted on respawn. */
+  respawnUnitCount: number;
   /** Fraction of banked gems scattered when you lose a squad fight. */
   gemLossFraction: number;
   /** Seconds after match start before the late-unlock archetypes enter chests. */
@@ -57,13 +67,15 @@ export const MATCH: MatchConfig = {
   lastCallMultiplier: 2,
   squadCap: 15,
   startingGems: 0,
-  startingSquad: [{ type: 'striker', count: 2 }],
+  startingUnitCount: 1,
+  draftSeconds: 15,
+  draftOfferCount: 3,
   chestBasePrice: 6,
   chestPriceStep: 3,
   chestOfferCount: 3,
   fusionThreshold: 3,
   respawnSeconds: 5,
-  respawnSquad: [{ type: 'striker', count: 2 }],
+  respawnUnitCount: 2,
   gemLossFraction: 0.2,
   lateUnlockSeconds: 120,
   leaderSpeed: 4.2,
@@ -81,6 +93,12 @@ export const GEM_YIELD = {
   creepCampBonus: 6,
 };
 
-/** Match phases, in order. */
-export const PHASES = ['lobby', 'playing', 'lastCall', 'ended'] as const;
+/**
+ * Match phases, in order.
+ *
+ * `draft` sits between the lobby and play: the world exists and the map is
+ * generated, but no squads have spawned yet because nobody has chosen what
+ * they are starting with.
+ */
+export const PHASES = ['lobby', 'draft', 'playing', 'lastCall', 'ended'] as const;
 export type Phase = (typeof PHASES)[number];

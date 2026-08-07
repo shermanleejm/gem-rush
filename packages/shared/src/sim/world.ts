@@ -12,16 +12,18 @@
  */
 
 import { MATCH, TICK_DT, type Phase } from '../config/match.ts';
+import { DEFAULT_MODE, GAME_MODES, type GameMode, type GameModeId } from '../config/modes.ts';
 import { MAP, zoneAt, zoneYieldMultiplier } from '../config/map.ts';
 import {
+  STARTER_UNIT_TYPES,
   UNIT_DEFS,
-  harvesterMultiplier,
-  scoutSpeedBonus,
   type UnitTier,
   type UnitType,
 } from '../config/units.ts';
 import { Rng } from '../math/rng.ts';
 import { clamp, distanceSq, normalizeInto, type Vec2 } from '../math/vec2.ts';
+import { NO_AURAS, applyHpAura, squadAuras, type SquadAuras } from './auras.ts';
+import { updateSummons } from './summons.ts';
 import {
   decaySlow,
   resolveAttack,
@@ -32,7 +34,7 @@ import {
 import { TEAM_NEUTRAL, EntityStore, type Entity, type EntityId } from './entities.ts';
 import { assignSlots, separate, slotPosition, steerToSlot, unitMoveSpeed } from './formation.ts';
 import { applyFusions, type FusionResult } from './fusion.ts';
-import { generateMap, isWallAt, type GeneratedMap } from './mapgen.ts';
+import { findOpenTile, generateMap, isWallAt, type GeneratedMap } from './mapgen.ts';
 import {
   CREEP_DAMAGE,
   CREEP_INTERVAL,
@@ -42,6 +44,7 @@ import {
   spawnChest,
   spawnCreep,
   spawnGem,
+  spawnHatchling,
   spawnLeader,
   spawnNode,
   spawnUnit,
@@ -56,6 +59,8 @@ export interface InputCommand {
   dirY: number;
   /** Set when the player confirms a chest purchase choice (index into offer). */
   chestChoice?: number;
+  /** Set when the player picks their starting character during the draft. */
+  draftChoice?: number;
 }
 
 export interface PlayerState {
@@ -76,6 +81,18 @@ export interface PlayerState {
   offerChestId: EntityId;
   /** Set while the squad is wiped and waiting to respawn. */
   wiped: boolean;
+  /** Alliance index: equals `index` in a free-for-all, shared in duos/co-op. */
+  alliance: number;
+  /** The three characters offered in the opening draft, until one is taken. */
+  draftOffer: UnitType[] | null;
+  /** Whether that offer has been announced to the client yet. */
+  draftAnnounced: boolean;
+  /** The character this player drafted; also what they respawn with. */
+  starterType: UnitType | null;
+  /** Knocked out for good. Only ever set in elimination modes. */
+  eliminated: boolean;
+  /** Collectibles this player has recovered, in modes that have them. */
+  rescued: number;
 }
 
 export type WorldEvent =
@@ -85,8 +102,13 @@ export type WorldEvent =
   | { t: 'fusion'; x: number; y: number; player: PlayerId; unit: UnitType; tier: UnitTier }
   | { t: 'chestOffer'; player: PlayerId; options: UnitType[]; price: number }
   | { t: 'chestOpen'; x: number; y: number; player: PlayerId; unit: UnitType }
+  | { t: 'summon'; x: number; y: number; player: PlayerId; unit: UnitType }
   | { t: 'squadFight'; x: number; y: number; winner: PlayerId; loser: PlayerId; dropped: number }
   | { t: 'respawn'; player: PlayerId }
+  | { t: 'eliminated'; player: PlayerId }
+  | { t: 'rescue'; x: number; y: number; player: PlayerId }
+  | { t: 'draftOffer'; player: PlayerId; options: UnitType[] }
+  | { t: 'draftPick'; player: PlayerId; unit: UnitType }
   | { t: 'phase'; phase: Phase };
 
 const scratchVec: Vec2 = { x: 0, y: 0 };
@@ -98,10 +120,16 @@ export class World {
   readonly rng: Rng;
   readonly map: GeneratedMap;
 
+  readonly mode: GameMode;
+
   tickNumber = 0;
   /** Seconds elapsed in the match. */
   elapsed = 0;
   phase: Phase = 'lobby';
+  /** Seconds left in the opening draft. */
+  draftRemaining = 0;
+  /** Current ring radius in world units; Infinity when no ring is closing. */
+  ringRadius = Infinity;
 
   camps: CreepCamp[] = [];
   chestSpots: { x: number; y: number }[] = [];
@@ -113,15 +141,25 @@ export class World {
   private readonly healBuf: HealEvent[] = [];
   /** Squad membership cache, rebuilt each tick. Reused to avoid allocation. */
   private readonly squads = new Map<PlayerId, Entity[]>();
+  /** Squad aura totals, recomputed each tick alongside `squads`. */
+  private readonly auras = new Map<PlayerId, SquadAuras>();
   private nodeRespawns: { x: number; y: number; in: number }[] = [];
   private chestRespawns: { x: number; y: number; in: number }[] = [];
 
-  constructor(seed: number, playerCount: number) {
+  constructor(seed: number, playerCount: number, modeId: GameModeId = DEFAULT_MODE) {
     this.rng = new Rng(seed);
+    this.mode = GAME_MODES[modeId];
     this.map = generateMap(this.rng, playerCount);
     const populated = populateArena(this.store, this.map.tiles, this.rng);
     this.camps = populated.camps;
     this.chestSpots = populated.chestSpots;
+
+    if (this.mode.collectibles > 0) {
+      for (let i = 0; i < this.mode.collectibles; i++) {
+        const spot = findOpenTile(this.map.tiles, this.rng, MAP.size);
+        spawnHatchling(this.store, spot.x, spot.y);
+      }
+    }
   }
 
   // ── players ───────────────────────────────────────────────────────────────
@@ -146,15 +184,38 @@ export class World {
       offer: null,
       offerChestId: 0,
       wiped: false,
+      // In co-op everyone shares one alliance; in duos players pair up by
+      // index; otherwise each player is their own side. Deriving it here means
+      // no later step has to know which mode is running.
+      alliance: this.mode.pve ? 0 : Math.floor(index / this.mode.teamSize),
+      draftOffer: null,
+      draftAnnounced: false,
+      starterType: null,
+      eliminated: false,
+      rescued: 0,
     };
     this.players.set(id, state);
+    leader.alliance = state.alliance;
 
-    for (const group of MATCH.startingSquad) {
-      for (let i = 0; i < group.count; i++) {
-        spawnUnit(this.store, index, group.type as UnitType, 0, pad.x, pad.y + 0.6 + i * 0.3);
-      }
-    }
+    // No squad yet. Units arrive when the draft resolves and the player has
+    // actually chosen what they are starting with.
     return state;
+  }
+
+  /** Everyone sharing an alliance with this player, including themselves. */
+  alliesOf(player: PlayerState): PlayerState[] {
+    const out: PlayerState[] = [];
+    for (const p of this.players.values()) if (p.alliance === player.alliance) out.push(p);
+    return out;
+  }
+
+  /** Pooled score for a player's side: their own in FFA, the pair's in duos. */
+  allianceScore(player: PlayerState): number {
+    let total = 0;
+    for (const p of this.alliesOf(player)) {
+      total += this.mode.winBy === 'collect' ? p.rescued : p.gems;
+    }
+    return total;
   }
 
   removePlayer(id: PlayerId): void {
@@ -176,14 +237,89 @@ export class World {
     return out;
   }
 
+  /**
+   * Squad size for the purposes of the cap and the HUD.
+   *
+   * Summoned helpers are excluded. Counting them would mean a Necromancer
+   * silently spent four of your fifteen slots, making every Summoner strictly
+   * worse than the unit it competes with — the class would be unpickable.
+   */
+  squadSize(playerIndex: number): number {
+    let n = 0;
+    for (const e of this.store.items) {
+      if (e.alive && e.kind === 'unit' && e.team === playerIndex && e.ownerId === 0) n++;
+    }
+    return n;
+  }
+
+  /** What this player's next chest actually costs, after Supplier discounts. */
+  chestPriceFor(player: PlayerState): number {
+    const discount = this.aurasOf(player.id).chestDiscount;
+    return Math.max(1, Math.round(player.nextChestPrice - discount));
+  }
+
   leaderOf(player: PlayerState): Entity | undefined {
     return this.store.get(player.leaderId);
   }
 
+  /**
+   * Open the character draft.
+   *
+   * Every player is offered `draftOfferCount` starters drawn independently, so
+   * two players can be offered the same character — a shared pool would mean
+   * the last player to be dealt got whatever nobody else wanted, which is a
+   * worse experience than an occasional mirror match.
+   */
+  beginDraft(): void {
+    this.phase = 'draft';
+    this.elapsed = 0;
+    this.tickNumber = 0;
+    this.draftRemaining = MATCH.draftSeconds;
+    this.ringRadius = Infinity;
+
+    for (const player of this.players.values()) {
+      const pool = this.rng.shuffle(STARTER_UNIT_TYPES.slice());
+      player.draftOffer = pool.slice(0, MATCH.draftOfferCount);
+      player.draftAnnounced = false;
+    }
+    // No events emitted here. `beginDraft` is called from outside the tick, and
+    // `tick()` clears the event buffer before it does anything else, so
+    // anything queued now would be thrown away before it could be broadcast.
+    // The first draft tick announces instead.
+  }
+
+  /** Lock in a player's starting character. Ignored once they have one. */
+  chooseStarter(player: PlayerState, choiceIndex: number): void {
+    if (player.starterType || !player.draftOffer) return;
+    const pick = player.draftOffer[clamp(choiceIndex, 0, player.draftOffer.length - 1)];
+    if (!pick) return;
+    player.starterType = pick;
+    this.events.push({ t: 'draftPick', player: player.id, unit: pick });
+  }
+
+  /**
+   * Leave the draft and spawn everyone's opening squad.
+   *
+   * Anyone who never picked is given the first character they were offered.
+   * Starting them with nothing would be a strictly worse outcome for a player
+   * who tabbed away for fifteen seconds, and an empty squad has no recovery
+   * path — you need units to earn the gems to buy units.
+   */
   start(): void {
     this.phase = 'playing';
     this.elapsed = 0;
     this.tickNumber = 0;
+
+    for (const player of this.players.values()) {
+      if (!player.starterType) this.chooseStarter(player, 0);
+      const type = player.starterType ?? STARTER_UNIT_TYPES[0]!;
+      const pad = this.map.homePads[player.index % this.map.homePads.length]!;
+      for (let i = 0; i < MATCH.startingUnitCount; i++) {
+        const unit = spawnUnit(this.store, player.index, type, 0, pad.x, pad.y + 0.6 + i * 0.3);
+        unit.alliance = player.alliance;
+      }
+    }
+    this.events.push({ t: 'phase', phase: 'playing' });
   }
 
   // ── the tick ──────────────────────────────────────────────────────────────
@@ -199,7 +335,18 @@ export class World {
       return;
     }
 
+    if (this.phase === 'draft') {
+      this.tickDraft(inputs, dt);
+      this.tickNumber++;
+      return;
+    }
+
     this.rebuildSquads();
+    // Squad-wide auras are derived once per tick and cached, because six later
+    // steps read them and recomputing per read would mean six passes over every
+    // squad. They must be refreshed *after* rebuildSquads and *before* anything
+    // that moves or fights, so a unit bought last tick is already contributing.
+    this.refreshAuras();
 
     // 1. Apply player inputs -> leader velocities
     this.applyInputs(inputs, dt);
@@ -209,12 +356,17 @@ export class World {
     this.updateFormations(dt);
     // 4 + 5. Acquire targets, resolve attacks and healing
     this.resolveCombat(dt);
+    // 5b. Summoners field their helpers.
+    this.resolveSummons(dt);
     // 6. Resolve deaths, drop gems
     this.resolveDeaths();
     // 7. Resolve pickups (gems, chests)
     this.resolvePickups(inputs, dt);
     // 8. Squad-vs-squad collision outcomes
     this.resolveSquadCollisions();
+    // 8b. Mode rules: the closing ring, and rescue pickups.
+    if (this.mode.ring) this.updateRing(dt);
+    if (this.mode.collectibles > 0) this.resolveRescues();
     // 9. Respawn timers, node respawns, creep camp respawns
     this.resolveRespawns(dt);
     // 10. Phase/timer update
@@ -237,6 +389,120 @@ export class World {
     }
   }
 
+  /**
+   * The draft: collect picks, and leave as soon as everyone has chosen.
+   *
+   * Ending early on unanimous picks matters more than it looks — with a full
+   * lobby of people who all pick instantly, sitting through the remaining
+   * twelve seconds of an empty timer is the first thing anyone notices about
+   * the game.
+   */
+  private tickDraft(inputs: Map<PlayerId, InputCommand>, dt: number): void {
+    // Announce offers from inside the tick, so they land in the buffer that
+    // actually gets broadcast. Doing it per-player-once rather than on the
+    // first tick alone also covers a player who joins mid-draft.
+    for (const player of this.players.values()) {
+      if (player.draftAnnounced || !player.draftOffer) continue;
+      player.draftAnnounced = true;
+      this.events.push({ t: 'draftOffer', player: player.id, options: player.draftOffer });
+    }
+
+    for (const [id, input] of inputs) {
+      if (typeof input.draftChoice !== 'number') continue;
+      const player = this.players.get(id);
+      if (player) this.chooseStarter(player, input.draftChoice);
+    }
+
+    this.draftRemaining -= dt;
+    const everyonePicked = [...this.players.values()].every((p) => p.starterType !== null);
+    if (everyonePicked || this.draftRemaining <= 0) this.start();
+  }
+
+  /**
+   * Close the ring and burn anything caught outside it.
+   *
+   * The ring is centred on the map and shrinks toward — but never to — a point,
+   * so there is always somewhere to stand at the end. Damage is dealt to units
+   * rather than leaders, because leaders are invulnerable (§1.7): a leader
+   * stranded outside simply loses their squad and is then wiped normally, which
+   * routes elimination through the one code path that already handles it.
+   */
+  private updateRing(dt: number): void {
+    const centre = MAP.size / 2;
+    const start = MAP.size * 0.75;
+    const end = MAP.size * 0.12;
+
+    const t = clamp(
+      (this.elapsed - this.mode.ringDelaySeconds) / Math.max(1, this.mode.ringCloseSeconds),
+      0,
+      1,
+    );
+    this.ringRadius = this.elapsed < this.mode.ringDelaySeconds ? start : start + (end - start) * t;
+
+    const rSq = this.ringRadius * this.ringRadius;
+    const damage = this.mode.ringDamagePerSecond * dt;
+    for (const e of this.store.items) {
+      if (!e.alive || e.kind !== 'unit') continue;
+      if (distanceSq(e.x, e.y, centre, centre) <= rSq) continue;
+      e.hp -= damage;
+      e.lastDamagedAt = this.elapsed;
+      if (e.hp <= 0) {
+        e.hp = 0;
+        this.events.push({ t: 'death', x: e.x, y: e.y, id: e.id, kind: e.kind });
+        this.store.despawn(e);
+      }
+    }
+  }
+
+  /** Leaders walking over a hatchling bank it for their side. */
+  private resolveRescues(): void {
+    for (const player of this.players.values()) {
+      if (player.eliminated) continue;
+      const leader = this.leaderOf(player);
+      if (!leader) continue;
+
+      for (const e of this.store.items) {
+        if (!e.alive || e.kind !== 'hatchling') continue;
+        const reach = leader.radius + e.radius + 0.35;
+        if (distanceSq(leader.x, leader.y, e.x, e.y) > reach * reach) continue;
+        player.rescued += 1;
+        this.events.push({ t: 'rescue', x: e.x, y: e.y, player: player.id });
+        this.store.despawn(e);
+      }
+    }
+  }
+
+  /** Recompute each squad's aura totals and apply the HP aura to its members. */
+  private refreshAuras(): void {
+    for (const player of this.players.values()) {
+      const squad = this.squads.get(player.id) ?? [];
+      const auras = squadAuras(squad);
+      this.auras.set(player.id, auras);
+      applyHpAura(squad, auras.hpMultiplier);
+    }
+  }
+
+  /** Auras for a player, or the neutral defaults if they have no squad yet. */
+  aurasOf(playerId: PlayerId): SquadAuras {
+    return this.auras.get(playerId) ?? NO_AURAS;
+  }
+
+  private resolveSummons(dt: number): void {
+    for (const player of this.players.values()) {
+      const squad = this.squads.get(player.id) ?? [];
+      const created = updateSummons(this.store, squad, player.index, dt);
+      for (const helper of created) {
+        this.events.push({
+          t: 'summon',
+          x: helper.x,
+          y: helper.y,
+          player: player.id,
+          unit: helper.unitType!,
+        });
+      }
+    }
+  }
+
   private applyInputs(inputs: Map<PlayerId, InputCommand>, dt: number): void {
     for (const player of this.players.values()) {
       const leader = this.leaderOf(player);
@@ -251,9 +517,7 @@ export class World {
       player.lastAckSeq = input.seq;
 
       normalizeInto(scratchVec, input.dirX, input.dirY);
-      const squad = this.squads.get(player.id) ?? [];
-      const scouts = squad.filter((u) => u.unitType === 'scout').length;
-      const speed = MATCH.leaderSpeed * (1 + scoutSpeedBonus(scouts));
+      const speed = MATCH.leaderSpeed * (1 + this.aurasOf(player.id).speedBonus);
 
       leader.vx = scratchVec.x * speed;
       leader.vy = scratchVec.y * speed;
@@ -321,14 +585,20 @@ export class World {
       if (!squad || !leader || squad.length === 0) continue;
 
       assignSlots(squad);
-      const scouts = squad.filter((u) => u.unitType === 'scout').length;
-      const scoutBonus = scoutSpeedBonus(scouts);
+      const squadSpeedBonus = this.aurasOf(player.id).speedBonus;
       const baseSpeed = MATCH.leaderSpeed * MATCH.squadCatchupSpeed;
 
       for (const unit of squad) {
         decaySlow(unit, dt);
+        // A stunned unit is rooted. Decaying the timer above but skipping the
+        // move keeps the stun visible — the squad walks off and leaves it.
+        if (unit.stunRemaining > 0) {
+          unit.vx = 0;
+          unit.vy = 0;
+          continue;
+        }
         slotPosition(scratchSlot, leader.x, leader.y, player.facing, unit.slot);
-        const speed = unitMoveSpeed(unit, baseSpeed, scoutBonus);
+        const speed = unitMoveSpeed(unit, baseSpeed, squadSpeedBonus);
         steerToSlot(unit, scratchSlot.x, scratchSlot.y, speed);
         this.moveWithCollision(unit, dt);
       }
@@ -408,7 +678,7 @@ export class World {
     }
   }
 
-  /** Gems awarded for destroying `source`, after Harvester, zone and phase multipliers. */
+  /** Gems awarded for destroying `source`, after Supplier, zone and phase multipliers. */
   private gemValueFor(source: Entity, killerTeam: number): number {
     let base = source.value;
     if (base <= 0) return 0;
@@ -418,13 +688,11 @@ export class World {
 
     if (killerTeam !== TEAM_NEUTRAL) {
       const owner = this.playerByIndex(killerTeam);
-      if (owner) {
-        const squad = this.squads.get(owner.id) ?? [];
-        const harvesters = squad.filter((u) => u.unitType === 'harvester').length;
-        // §1.5: the Harvester bonus applies to nodes and props, not to kills.
-        if (source.kind === 'node' || source.kind === 'prop') {
-          base *= harvesterMultiplier(harvesters);
-        }
+      // §1.5: the Supplier bonus applies to harvested nodes and props, not to
+      // kills — otherwise an economy squad would also be paid for winning
+      // fights it is deliberately bad at.
+      if (owner && (source.kind === 'node' || source.kind === 'prop')) {
+        base *= this.aurasOf(owner.id).gemMultiplier;
       }
     }
 
@@ -552,7 +820,7 @@ export class World {
         if (!e.alive || e.kind !== 'chest') continue;
         const reach = leader.radius + e.radius + 0.3;
         if (distanceSq(leader.x, leader.y, e.x, e.y) > reach * reach) continue;
-        if (player.gems < player.nextChestPrice) continue;
+        if (player.gems < this.chestPriceFor(player)) continue;
 
         const pool = chestPool(this.elapsed);
         const options: UnitType[] = [];
@@ -567,7 +835,7 @@ export class World {
           t: 'chestOffer',
           player: player.id,
           options,
-          price: player.nextChestPrice,
+          price: this.chestPriceFor(player),
         });
         break;
       }
@@ -580,16 +848,15 @@ export class World {
     const chest = this.store.get(player.offerChestId);
     const choice = offer[clamp(choiceIndex, 0, offer.length - 1)];
 
+    const price = this.chestPriceFor(player);
     player.offer = null;
     player.offerChestId = 0;
     if (!choice || !chest) return;
-    if (player.gems < player.nextChestPrice) return;
-
-    const squad = this.squadOf(player.index);
-    if (squad.length >= MATCH.squadCap) return;
+    if (player.gems < price) return;
+    if (this.squadSize(player.index) >= MATCH.squadCap) return;
 
     // Spending is a real score sacrifice (§1.4) — gems leave the bank for good.
-    player.gems -= player.nextChestPrice;
+    player.gems -= price;
     player.chestsOpened += 1;
     player.nextChestPrice += MATCH.chestPriceStep;
 
@@ -632,7 +899,7 @@ export class World {
     const contactSq = contact * contact;
 
     for (const loser of this.players.values()) {
-      if (loser.wiped) continue;
+      if (loser.wiped || loser.eliminated) continue;
       const squad = this.squads.get(loser.id) ?? [];
       const stillAlive = squad.filter((u) => u.alive && u.hp > 0);
       if (stillAlive.length > 0) continue;
@@ -640,11 +907,13 @@ export class World {
       const loserLeader = this.leaderOf(loser);
       if (!loserLeader) continue;
 
-      // Who was nearby when it happened? Nearest enemy leader with a live squad.
+      // Who was nearby when it happened? Nearest hostile leader with a live
+      // squad — allies are skipped, or a duo partner standing over their
+      // teammate's wipe would be credited with busting them.
       let winner: PlayerState | null = null;
       let bestDistSq = contactSq;
       for (const other of this.players.values()) {
-        if (other.id === loser.id) continue;
+        if (other.id === loser.id || other.alliance === loser.alliance) continue;
         const otherSquad = this.squads.get(other.id) ?? [];
         if (otherSquad.length === 0) continue;
         const otherLeader = this.leaderOf(other);
@@ -658,6 +927,10 @@ export class World {
 
       loser.wiped = true;
       loser.respawnIn = MATCH.respawnSeconds;
+      if (this.mode.elimination) {
+        loser.eliminated = true;
+        this.events.push({ t: 'eliminated', player: loser.id });
+      }
 
       const dropped = Math.floor(loser.gems * MATCH.gemLossFraction);
       if (dropped > 0) {
@@ -680,7 +953,9 @@ export class World {
 
   private resolveRespawns(dt: number): void {
     for (const player of this.players.values()) {
-      if (!player.wiped) continue;
+      // Elimination modes never bring anyone back; the wipe is the end of
+      // their match and the timer below must not undo it.
+      if (!player.wiped || player.eliminated) continue;
       player.respawnIn -= dt;
       if (player.respawnIn > 0) continue;
 
@@ -692,10 +967,13 @@ export class World {
         leader.vx = 0;
         leader.vy = 0;
       }
-      for (const group of MATCH.respawnSquad) {
-        for (let i = 0; i < group.count; i++) {
-          spawnUnit(this.store, player.index, group.type as UnitType, 0, pad.x, pad.y + 0.5);
-        }
+      // Rebuild around the character they drafted, not a fixed default — the
+      // starter is that player's identity for the match, and handing them
+      // somebody else's unit on respawn would quietly undo their pick.
+      const type = player.starterType ?? STARTER_UNIT_TYPES[0]!;
+      for (let i = 0; i < MATCH.respawnUnitCount; i++) {
+        const unit = spawnUnit(this.store, player.index, type, 0, pad.x, pad.y + 0.5 + i * 0.3);
+        unit.alliance = player.alliance;
       }
       player.wiped = false;
       player.respawnIn = 0;
@@ -739,28 +1017,69 @@ export class World {
 
   private updatePhase(dt: number): void {
     this.elapsed += dt;
-    const remaining = MATCH.matchSeconds - this.elapsed;
+    const remaining = this.mode.matchSeconds - this.elapsed;
 
-    if (this.phase === 'playing' && remaining <= MATCH.lastCallSeconds) {
+    if (this.mode.timed && this.phase === 'playing' && remaining <= this.mode.lastCallSeconds) {
       this.phase = 'lastCall';
       this.events.push({ t: 'phase', phase: 'lastCall' });
     }
-    if (remaining <= 0 && this.phase !== 'ended') {
+
+    if (this.phase !== 'ended' && this.isOver(remaining)) {
       this.phase = 'ended';
       this.events.push({ t: 'phase', phase: 'ended' });
     }
   }
 
-  /** Seconds left in the match, floored at zero. */
-  get timeRemaining(): number {
-    return Math.max(0, MATCH.matchSeconds - this.elapsed);
+  /** Has this mode's win condition been met? */
+  private isOver(remaining: number): boolean {
+    // Every mode has a hard ceiling, timed or not, so nothing can run forever.
+    if (remaining <= 0) return true;
+
+    switch (this.mode.winBy) {
+      case 'survival': {
+        // One side left standing. Counting *alliances* rather than players is
+        // what makes this correct for duos: a surviving pair is one winner,
+        // not a draw between two.
+        const sides = new Set<number>();
+        for (const p of this.players.values()) if (!p.eliminated) sides.add(p.alliance);
+        return sides.size <= 1;
+      }
+      case 'collect':
+        // Co-op ends the moment the last collectible is home.
+        return this.store.count('hatchling') === 0;
+      default:
+        return false;
+    }
   }
 
-  /** Standings, highest gems first. */
-  standings(): { id: PlayerId; name: string; gems: number }[] {
-    return [...this.players.values()]
-      .map((p) => ({ id: p.id, name: p.name, gems: p.gems }))
-      .sort((a, b) => b.gems - a.gems);
+  /** Seconds left in the match, floored at zero. */
+  get timeRemaining(): number {
+    return Math.max(0, this.mode.matchSeconds - this.elapsed);
+  }
+
+  /**
+   * Standings, best first.
+   *
+   * `score` is whatever the mode counts, so the results screen never has to
+   * know which mode it is showing. Survival ranks by who is still alive first
+   * and gems second, which is the only sensible tiebreak when the winner is
+   * decided by elimination rather than by a number.
+   */
+  standings(): { id: PlayerId; name: string; gems: number; score: number; eliminated: boolean }[] {
+    const rows = [...this.players.values()].map((p) => ({
+      id: p.id,
+      name: p.name,
+      gems: p.gems,
+      score: this.allianceScore(p),
+      eliminated: p.eliminated,
+    }));
+
+    if (this.mode.winBy === 'survival') {
+      return rows.sort(
+        (a, b) => Number(a.eliminated) - Number(b.eliminated) || b.gems - a.gems,
+      );
+    }
+    return rows.sort((a, b) => b.score - a.score);
   }
 }
 

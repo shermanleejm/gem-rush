@@ -7,6 +7,7 @@
  */
 
 import {
+  GAME_MODES,
   INPUT_RATE,
   MATCH,
   type LobbyPlayer,
@@ -29,6 +30,8 @@ import {
   createStick,
   showJoin,
   showLobby,
+  showDraft,
+  showModeCard,
   showResults,
   showRoomCode,
   type HudHandle,
@@ -119,6 +122,10 @@ const listeners = {
     running = false;
     hud?.destroy();
     hud = null;
+    draft?.close();
+    draft = null;
+    closeModeCard?.();
+    closeModeCard = null;
     closeResults = showResults(standings, conn.playerId, conn.playerId === hostId, () => {
       conn.requestStart();
     });
@@ -243,8 +250,41 @@ function handleEvents(events: WorldEvent[]): void {
         break;
       case 'respawn':
         break;
+      case 'summon':
+        scene.spawnBurst(ev.x, ev.y, 0x9d8cff, 8);
+        break;
+      case 'rescue':
+        scene.spawnBurst(ev.x, ev.y, 0xffe27a, 12);
+        if (ev.player === conn.playerId) audio.play('pickup');
+        break;
+      case 'eliminated':
+        if (ev.player === conn.playerId) audio.play('wipe');
+        break;
+
+      case 'draftOffer':
+        if (ev.player === conn.playerId && !draft) {
+          draft = showDraft(ev.options, (i) => {
+            conn.sendDraftChoice(i);
+            // Optimistic: the host confirms via `draftPick`, but a button that
+            // does nothing for a round-trip feels broken on a slow link.
+            draft?.markPicked(ev.options[i]!);
+          });
+        }
+        break;
+      case 'draftPick':
+        if (ev.player === conn.playerId) draft?.markPicked(ev.unit);
+        break;
+
       case 'phase':
         audio.play('phase');
+        // Leaving the draft: drop the picker and announce the mode, which is
+        // drawn per match and is the first thing a player needs to know.
+        if (ev.phase === 'playing') {
+          draft?.close();
+          draft = null;
+          closeModeCard?.();
+          closeModeCard = showModeCard(conn.mode);
+        }
         break;
     }
   }
@@ -253,6 +293,8 @@ function handleEvents(events: WorldEvent[]): void {
 // ── loop ────────────────────────────────────────────────────────────────────
 
 let chestChoice: number | undefined;
+let draft: ReturnType<typeof showDraft> | null = null;
+let closeModeCard: (() => void) | null = null;
 const minimapDots: { x: number; y: number; kind: string; team: number; mine: boolean }[] = [];
 let lastFrame = performance.now();
 let inputAcc = 0;
@@ -296,16 +338,50 @@ function frame(now: number): void {
     // HUD
     const me = conn.players.find((p) => p.id === conn.playerId);
     if (hud) {
+      const mode = GAME_MODES[conn.mode];
+
+      // The draft panel normally opens on the `draftOffer` event, but events
+      // are fire-and-forget VFX-grade delivery (§2.6) and the offer also rides
+      // in every snapshot. Rebuilding it from snapshot state means a dropped
+      // event costs a frame, not the player's entire pick.
+      if (conn.phase === 'draft' && me?.draft && !draft) {
+        const options = me.draft;
+        draft = showDraft(options, (i) => {
+          conn.sendDraftChoice(i);
+          draft?.markPicked(options[i]!);
+        });
+      }
+      if (draft) {
+        draft.setRemaining(conn.timeRemaining);
+        if (conn.phase !== 'draft') {
+          draft.close();
+          draft = null;
+        }
+      }
+
       hud.setTimer(conn.timeRemaining, conn.phase === 'lastCall');
       hud.setGems(me?.g ?? 0);
       hud.setSquad(squadSize, conn.config.squadCap);
+      hud.setMode(mode.label);
+
+      // The scoreboard has to count whatever the mode counts. Showing gems in
+      // Hatchling Run would rank players by an irrelevant number, and in duos
+      // the pair shares one total, so partners must show the same figure.
+      const scoreOf = (p: (typeof conn.players)[number]): number => {
+        if (mode.winBy === 'collect') return p.r;
+        if (mode.teamSize > 1) {
+          return conn.players.filter((q) => q.a === p.a).reduce((n, q) => n + q.g, 0);
+        }
+        return p.g;
+      };
       const rows = conn.players
         .map((p) => ({
           id: p.id,
           name: lobbyPlayers.find((l) => l.id === p.id)?.name ?? `P${p.id}`,
-          gems: p.g,
+          gems: scoreOf(p),
+          out: p.out,
         }))
-        .sort((a, b) => b.gems - a.gems);
+        .sort((a, b) => Number(a.out) - Number(b.out) || b.gems - a.gems);
       hud.setScores(rows, conn.playerId);
       if (!pendingOffer) hud.hideOffer();
 

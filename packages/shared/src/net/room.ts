@@ -13,6 +13,7 @@
 
 import { MATCH, TICK_DT, TICK_RATE } from '../config/match.ts';
 import { UNIT_TYPES } from '../config/units.ts';
+import { DEFAULT_MODE, eligibleModes, type GameModeId } from '../config/modes.ts';
 import type {
   ClientMessage,
   EntityWire,
@@ -53,6 +54,8 @@ export class Room {
   private accumulator = 0;
   private nextPlayerId = 1;
   private seed = 0;
+  /** The mode this match is running. Drawn at random in `start()`. */
+  mode: GameModeId = DEFAULT_MODE;
 
   /** Rolling stats for the dev overlay and the §5 budget check. */
   stats = { tickMs: 0, snapshotBytes: 0, entities: 0 };
@@ -132,6 +135,7 @@ export class Room {
           dirX: msg.dirX,
           dirY: msg.dirY,
           ...(msg.chestChoice !== undefined ? { chestChoice: msg.chestChoice } : {}),
+          ...(msg.draftChoice !== undefined ? { draftChoice: msg.draftChoice } : {}),
         });
         return false;
       }
@@ -248,13 +252,22 @@ export class Room {
     if (participants.length === 0) return;
 
     this.seed = (Math.random() * 0xffffffff) >>> 0;
-    this.world = new World(this.seed, participants.length);
+
+    // One mode per match, drawn from those the current headcount supports —
+    // duos need even teams, Showdown needs a crowd. Picking before the World
+    // is built matters: the mode decides map contents (collectibles) and how
+    // players are allied, both of which are fixed at construction.
+    const choices = eligibleModes(participants.length);
+    this.mode = choices[Math.floor(Math.random() * choices.length)] ?? DEFAULT_MODE;
+
+    this.world = new World(this.seed, participants.length, this.mode);
     for (const m of participants) {
       this.world.addPlayer(m.id, m.name);
       m.lastSent.clear();
       m.lastFullTick = -Infinity;
     }
-    this.world.start();
+    // Opens the character draft; `World.start()` runs when everyone has picked.
+    this.world.beginDraft();
     this.state = 'playing';
 
     const assignments = [...this.world.players.values()].map((p) => ({
@@ -269,6 +282,7 @@ export class Room {
         seed: this.seed,
         tick0: 0,
         playerCount: participants.length,
+        mode: this.mode,
         assignments,
       });
       this.send(m.id, this.mapPayload());
@@ -334,8 +348,8 @@ export class Room {
     // Chest choices are one-shot: clear after the tick that consumed them so
     // the player doesn't buy three chests from one tap.
     for (const m of this.members.values()) {
-      if (m.input.chestChoice !== undefined) {
-        m.input = { ...m.input, chestChoice: undefined };
+      if (m.input.chestChoice !== undefined || m.input.draftChoice !== undefined) {
+        m.input = { ...m.input, chestChoice: undefined, draftChoice: undefined };
       }
     }
 
@@ -402,9 +416,16 @@ export class Room {
     const players: PlayerWire[] = [...world.players.values()].map((p) => ({
       id: p.id,
       g: p.gems,
-      p: p.nextChestPrice,
+      // The discounted price, since that is what the player will actually be
+      // charged — showing the undiscounted one would make Suppliers look broken.
+      p: world.chestPriceFor(p),
       wiped: p.wiped,
+      a: p.alliance,
+      r: p.rescued,
+      out: p.eliminated,
       ...(p.offer ? { offer: p.offer } : {}),
+      ...(p.draftOffer && !p.starterType ? { draft: p.draftOffer } : {}),
+      ...(p.starterType ? { starter: p.starterType } : {}),
     }));
 
     let measured = 0;
@@ -432,8 +453,9 @@ export class Room {
         t: 'snap',
         tick: world.tickNumber,
         ackSeq: m.input.seq,
-        time: world.timeRemaining,
+        time: world.phase === 'draft' ? world.draftRemaining : world.timeRemaining,
         phase: world.phase,
+        ...(Number.isFinite(world.ringRadius) ? { ring: world.ringRadius } : {}),
         full: wantFull,
         entities,
         removed,

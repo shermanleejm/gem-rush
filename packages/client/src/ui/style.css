@@ -259,6 +259,120 @@ button.secondary {
   font-weight: 600;
 }
 
+/* Opening character draft.
+   Sits over the arena rather than replacing it, so the map is visible while
+   choosing. Cards wrap on narrow screens: three side by side at 108px each is
+   already tight on a phone once padding is counted. */
+.draft {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 20px;
+  background: rgba(6, 9, 14, 0.72);
+  backdrop-filter: blur(3px);
+  pointer-events: auto;
+  z-index: 9;
+}
+
+.draft-title {
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.draft-timer {
+  font-size: 13px;
+  color: var(--ink-dim);
+  min-height: 18px;
+}
+
+.draft-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: center;
+}
+
+.draft-card {
+  width: 140px;
+  padding: 16px 12px;
+  background: var(--panel);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  align-items: center;
+}
+
+.draft-card.picked {
+  border-color: var(--accent);
+  opacity: 1;
+}
+
+.draft-name {
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.draft-class {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--accent);
+}
+
+.draft-card .role,
+.draft-stats {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--ink-dim);
+  text-align: center;
+  line-height: 1.35;
+}
+
+/* Mode card — the mode is drawn per match, so it has to be announced. */
+.mode-card {
+  position: fixed;
+  left: 50%;
+  top: 26%;
+  transform: translateX(-50%);
+  text-align: center;
+  padding: 14px 22px;
+  background: rgba(13, 17, 25, 0.92);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  max-width: min(420px, calc(100vw - 32px));
+  pointer-events: none;
+  z-index: 7;
+  transition: opacity 0.8s ease;
+}
+
+.mode-card.fading {
+  opacity: 0;
+}
+
+.mode-label {
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.mode-tagline {
+  margin-top: 2px;
+  font-size: 13px;
+  color: var(--accent);
+}
+
+.mode-objective {
+  margin-top: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink-dim);
+}
+
 /* Chest offer — the only place the game asks for a decision beyond movement. */
 .offer {
   position: fixed;
@@ -475,4 +589,18 @@ button.secondary {
 .roomcode button {
   padding: 5px 10px;
   font-size: 12px;
+}
+
+/* Mode name in the HUD. Dimmer than the live numbers beside it: it never
+   changes during a match, so it must not compete with the timer and score. */
+.pill.mode {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-dim);
+}
+
+/* An eliminated player stays on the scoreboard — knowing who is left is the
+   whole tension of Showdown — but greys out so the live rows read first. */
+.score-row.out {
+  opacity: 0.45;
 }

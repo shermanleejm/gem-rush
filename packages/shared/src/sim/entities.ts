@@ -21,6 +21,7 @@ export const ENTITY_KINDS = [
   'node',
   'chest',
   'gem',
+  'hatchling',
 ] as const;
 export type EntityKind = (typeof ENTITY_KINDS)[number];
 
@@ -33,6 +34,16 @@ export interface Entity {
   alive: boolean;
   /** Owning player index, or TEAM_NEUTRAL. */
   team: number;
+  /**
+   * Who this entity counts as *on the side of*, which is not always who owns
+   * it. In a free-for-all alliance equals team, but duos put two players on one
+   * alliance and co-op puts everyone on one, and hostility is decided by
+   * alliance alone. Keeping the two separate means "whose unit is this" (team,
+   * used for squads, colour and scoring) never has to be conflated with "may I
+   * shoot it" (alliance) — which is exactly the conflation that would otherwise
+   * make teammates shoot each other.
+   */
+  alliance: number;
 
   x: number;
   y: number;
@@ -55,6 +66,19 @@ export interface Entity {
   /** Remaining slow duration in seconds, and its strength. */
   slowRemaining: number;
   slowFactor: number;
+  /** Remaining stun in seconds. A stunned unit neither moves nor attacks. */
+  stunRemaining: number;
+  /**
+   * Focus-fire ramp: which target the streak is against, and how many
+   * consecutive hits it has landed. Switching target resets it, which is what
+   * makes the ramp a reward for holding a target rather than a flat buff.
+   */
+  rampTargetId: EntityId;
+  rampStacks: number;
+  /** Seconds until this unit may field its next summon. */
+  summonCooldown: number;
+  /** For summoned helpers: the unit that fielded them, so caps can be counted. */
+  ownerId: EntityId;
   /** Debounce for Mender heals (§1.6: one heal tick per target per 0.5s). */
   lastHealedAt: number;
   /** Match time of the last damage taken; gates out-of-combat regen. */
@@ -78,6 +102,7 @@ function blankEntity(id: EntityId): Entity {
     kind: 'prop',
     alive: false,
     team: TEAM_NEUTRAL,
+    alliance: TEAM_NEUTRAL,
     x: 0,
     y: 0,
     vx: 0,
@@ -92,6 +117,11 @@ function blankEntity(id: EntityId): Entity {
     slot: 0,
     slowRemaining: 0,
     slowFactor: 0,
+    stunRemaining: 0,
+    rampTargetId: 0,
+    rampStacks: 0,
+    summonCooldown: 0,
+    ownerId: 0,
     lastHealedAt: -1,
     lastDamagedAt: -999,
     value: 0,

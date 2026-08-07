@@ -9,8 +9,8 @@
 import { describe, expect, it } from 'vitest';
 
 import { MATCH, TICK_DT } from '../config/match.ts';
-import { UNIT_DEFS } from '../config/units.ts';
-import { spawnProp, spawnUnit } from './spawning.ts';
+import { PLAYABLE_UNIT_TYPES, STARTER_UNIT_TYPES, UNIT_DEFS } from '../config/units.ts';
+import { chestPool, spawnProp, spawnUnit } from './spawning.ts';
 import { World, type InputCommand } from './world.ts';
 
 function input(dirX: number, dirY: number, seq = 1): Map<number, InputCommand> {
@@ -96,11 +96,11 @@ describe('the core loop (§1.3)', () => {
       leaderB.y = 33;
 
       for (let i = 0; i < 2; i++) {
-        spawnUnit(world.store, a.index, 'guard', 0, 32 + i * 0.4, 31.4);
-        spawnUnit(world.store, a.index, 'marksman', 0, 32 + i * 0.4, 30.6);
+        spawnUnit(world.store, a.index, 'golem', 0, 32 + i * 0.4, 31.4);
+        spawnUnit(world.store, a.index, 'archer', 0, 32 + i * 0.4, 30.6);
       }
       for (let i = 0; i < 4; i++) {
-        spawnUnit(world.store, b.index, 'striker', 0, 32 + i * 0.4, 32.6);
+        spawnUnit(world.store, b.index, 'brute', 0, 32 + i * 0.4, 32.6);
       }
 
       const stand = new Map<number, InputCommand>([
@@ -178,7 +178,7 @@ describe('the core loop (§1.3)', () => {
     for (let i = 0; i < respawnTicks; i++) world.tick(input(0, 0));
 
     expect(player.wiped).toBe(false);
-    const expected = MATCH.respawnSquad.reduce((n, g) => n + g.count, 0);
+    const expected = MATCH.respawnUnitCount;
     expect(world.squadOf(player.index).length).toBe(expected);
   });
 
@@ -220,11 +220,21 @@ describe('unit definitions', () => {
     }
   });
 
-  it('only Striker, Marksman and Guard are in the early pool (§1.5)', () => {
-    const early = Object.values(UNIT_DEFS)
-      .filter((d) => d.earlyPool)
-      .map((d) => d.type)
-      .sort();
-    expect(early).toEqual(['guard', 'marksman', 'striker']);
+  it('the early pool is a small, playable subset of the roster (§1.5)', () => {
+    const early = PLAYABLE_UNIT_TYPES.filter((t) => UNIT_DEFS[t].earlyPool);
+
+    // Enough to make the first chest a real choice, few enough that the roster
+    // still opens up at the unlock time rather than being available at once.
+    expect(early.length).toBeGreaterThanOrEqual(MATCH.chestOfferCount);
+    expect(early.length).toBeLessThan(PLAYABLE_UNIT_TYPES.length);
+    // A summoned helper leaking into a chest would be an unbuyable dead pick.
+    expect(early.every((t) => !UNIT_DEFS[t].summonedOnly)).toBe(true);
+  });
+
+  it('never offers summoned helpers in chests or the draft', () => {
+    expect(PLAYABLE_UNIT_TYPES.some((t) => UNIT_DEFS[t].summonedOnly)).toBe(false);
+    expect(STARTER_UNIT_TYPES.some((t) => UNIT_DEFS[t].summonedOnly)).toBe(false);
+    // The full late pool is the playable roster, so nothing is unreachable.
+    expect(chestPool(MATCH.lateUnlockSeconds).length).toBe(PLAYABLE_UNIT_TYPES.length);
   });
 });

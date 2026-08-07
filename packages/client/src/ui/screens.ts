@@ -6,7 +6,14 @@
  * the bundle helps the <2MB budget.
  */
 
-import { UNIT_DEFS, type LobbyPlayer, type UnitType } from '@gem-rush/shared';
+import {
+  GAME_MODES,
+  UNIT_CLASS_LABELS,
+  UNIT_DEFS,
+  type GameModeId,
+  type LobbyPlayer,
+  type UnitType,
+} from '@gem-rush/shared';
 
 function el<K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -17,6 +24,97 @@ function el<K extends keyof HTMLElementTagNameMap>(
   if (className) node.className = className;
   if (html !== undefined) node.innerHTML = html;
   return node;
+}
+
+/** Colour swatch for a unit, from its accent colour. */
+function swatchFor(type: UnitType): HTMLElement {
+  const def = UNIT_DEFS[type];
+  const sw = el('div', 'swatch');
+  sw.style.background = `#${def.color.toString(16).padStart(6, '0')}`;
+  return sw;
+}
+
+// ── character draft ─────────────────────────────────────────────────────────
+
+/**
+ * Pick one of three characters to start the match with.
+ *
+ * Shown over the arena rather than as a separate screen, so the map and where
+ * everyone spawned are visible while choosing — and so the transition into play
+ * is the panel disappearing rather than a scene change.
+ *
+ * The countdown is honest about the auto-pick: the host starts the match when
+ * the timer expires whether or not you chose, and a player who does not know
+ * that would reasonably think their pick was ignored.
+ */
+export function showDraft(
+  options: UnitType[],
+  onPick: (index: number) => void,
+): { setRemaining: (s: number) => void; markPicked: (type: UnitType) => void; close: () => void } {
+  const root = el('div', 'draft');
+  const title = el('div', 'draft-title', 'Choose your starting character');
+  const timer = el('div', 'draft-timer', '');
+  const row = el('div', 'draft-row');
+
+  options.forEach((type, i) => {
+    const def = UNIT_DEFS[type];
+    const card = el('button', 'draft-card');
+    const name = el('div', 'draft-name');
+    name.textContent = def.label;
+    const cls = el('div', 'draft-class');
+    cls.textContent = UNIT_CLASS_LABELS[def.unitClass];
+    const role = el('div', 'role');
+    role.textContent = def.role;
+
+    const stats = el('div', 'draft-stats');
+    stats.textContent = `${Math.round(def.hp)} HP · ${(def.damage / def.attackInterval).toFixed(0)} DPS`;
+
+    card.append(swatchFor(type), name, cls, role, stats);
+    card.onclick = () => onPick(i);
+    row.appendChild(card);
+  });
+
+  root.append(title, row, timer);
+  document.body.appendChild(root);
+
+  return {
+    setRemaining(s) {
+      timer.textContent = s > 0 ? `Auto-picks in ${Math.ceil(s)}s` : 'Starting…';
+    },
+    markPicked(type) {
+      title.textContent = `You picked ${UNIT_DEFS[type].label}`;
+      row.querySelectorAll('button').forEach((b) => {
+        (b as HTMLButtonElement).disabled = true;
+      });
+      const picked = options.indexOf(type);
+      row.children[picked]?.classList.add('picked');
+    },
+    close() {
+      root.remove();
+    },
+  };
+}
+
+// ── mode card ───────────────────────────────────────────────────────────────
+
+/** Announce which mode was drawn, since it changes every match. */
+export function showModeCard(mode: GameModeId, holdSeconds = 4): () => void {
+  const def = GAME_MODES[mode];
+  const root = el('div', 'mode-card');
+  const label = el('div', 'mode-label');
+  label.textContent = def.label;
+  const tagline = el('div', 'mode-tagline');
+  tagline.textContent = def.tagline;
+  const objective = el('div', 'mode-objective');
+  objective.textContent = def.objective;
+  root.append(label, tagline, objective);
+  document.body.appendChild(root);
+
+  const timer = setTimeout(() => root.classList.add('fading'), holdSeconds * 1000);
+  return () => {
+    clearTimeout(timer);
+    root.remove();
+  };
 }
 
 // ── join ────────────────────────────────────────────────────────────────────
@@ -277,7 +375,11 @@ export interface HudHandle {
   setTimer: (seconds: number, lastCall: boolean) => void;
   setGems: (n: number) => void;
   setSquad: (n: number, cap: number) => void;
-  setScores: (rows: { id: number; name: string; gems: number }[], myId: number) => void;
+  setMode: (label: string) => void;
+  setScores: (
+    rows: { id: number; name: string; gems: number; out?: boolean }[],
+    myId: number,
+  ) => void;
   showOffer: (options: UnitType[], price: number, onPick: (i: number) => void) => void;
   hideOffer: () => void;
   destroy: () => void;
@@ -290,7 +392,8 @@ export function createHud(): HudHandle {
   const timer = el('div', 'pill timer', '4:00');
   const gems = el('div', 'pill gems', '0');
   const squad = el('div', 'pill', '0/15');
-  top.append(timer, gems, squad);
+  const modePill = el('div', 'pill mode', '');
+  top.append(modePill, timer, gems, squad);
 
   const left = el('div', 'hud-left');
   root.append(top, left);
@@ -313,12 +416,15 @@ export function createHud(): HudHandle {
     setSquad(n, cap) {
       squad.textContent = `${n}/${cap}`;
     },
+    setMode(label) {
+      if (modePill.textContent !== label) modePill.textContent = label;
+    },
     setScores(rows, myId) {
       left.innerHTML = '';
       for (const r of rows.slice(0, 8)) {
-        const row = el('div', `score-row${r.id === myId ? ' me' : ''}`);
+        const row = el('div', `score-row${r.id === myId ? ' me' : ''}${r.out ? ' out' : ''}`);
         const name = el('span');
-        name.textContent = r.name;
+        name.textContent = r.out ? `${r.name} — out` : r.name;
         const g = el('span', 'g');
         g.textContent = String(r.gems);
         row.append(name, g);

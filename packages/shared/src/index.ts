@@ -5,9 +5,12 @@ export * from './math/vec2.ts';
 
 export * from './config/units.ts';
 export * from './config/match.ts';
+export * from './config/modes.ts';
 export * from './config/map.ts';
 
 export * from './sim/entities.ts';
+export * from './sim/auras.ts';
+export * from './sim/summons.ts';
 export * from './sim/mapgen.ts';
 export * from './sim/formation.ts';
 export * from './sim/combat.ts';

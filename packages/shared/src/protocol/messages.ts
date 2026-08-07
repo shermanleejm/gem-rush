@@ -7,6 +7,7 @@
  */
 
 import type { MatchConfig } from '../config/match.ts';
+import type { GameModeId } from '../config/modes.ts';
 import type { UnitTier, UnitType } from '../config/units.ts';
 import type { EntityId } from '../sim/entities.ts';
 import type { PlayerId, WorldEvent } from '../sim/world.ts';
@@ -32,6 +33,8 @@ export interface InputMsg {
   dirY: number;
   /** Index into the pending chest offer, when confirming a purchase. */
   chestChoice?: number;
+  /** Index into the opening draft offer, when choosing a starting character. */
+  draftChoice?: number;
 }
 
 export interface StartRequestMsg {
@@ -69,6 +72,8 @@ export interface StartMsg {
   seed: number;
   tick0: number;
   playerCount: number;
+  /** Drawn at random per match; clients need it to render the right rules. */
+  mode: GameModeId;
   /** Index assigned to each player, so clients can colour teams consistently. */
   assignments: { id: PlayerId; index: number; name: string }[];
 }
@@ -99,6 +104,16 @@ export interface PlayerWire {
   p: number;
   wiped: boolean;
   offer?: UnitType[];
+  /** Alliance index, so clients can colour duo partners as one side. */
+  a: number;
+  /** Collectibles recovered, in modes that have them. */
+  r: number;
+  /** Knocked out for good. */
+  out: boolean;
+  /** The opening draft offer, present only during the draft phase. */
+  draft?: UnitType[];
+  /** The character this player drafted, once chosen. */
+  starter?: UnitType;
 }
 
 export interface SnapshotMsg {
@@ -109,6 +124,8 @@ export interface SnapshotMsg {
   /** Match seconds remaining. */
   time: number;
   phase: string;
+  /** Closing-ring radius in world units; omitted when no ring is in play. */
+  ring?: number;
   /** Full snapshot (join / every 100 ticks) vs delta. */
   full: boolean;
   entities: EntityWire[];

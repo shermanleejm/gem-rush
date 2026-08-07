@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { MAP, TILE_WALL } from '../config/map.ts';
 import { MATCH, TICK_DT } from '../config/match.ts';
-import { harvesterMultiplier, scoutSpeedBonus, unitMaxHp } from '../config/units.ts';
+import { UNIT_DEFS, gemMultiplier, speedBonus, unitMaxHp } from '../config/units.ts';
 import { Rng } from '../math/rng.ts';
 import { EntityStore } from './entities.ts';
 import { applyFusions, type FusionResult } from './fusion.ts';
@@ -48,23 +48,34 @@ describe('Rng', () => {
 });
 
 describe('stacking formulas (§1.6)', () => {
-  it('harvester bonus diminishes and caps at +100%', () => {
-    expect(harvesterMultiplier(0)).toBe(1);
-    const one = harvesterMultiplier(1);
-    const two = harvesterMultiplier(2);
-    const three = harvesterMultiplier(3);
+  // 0.3 is the baseline Supplier's gemBonus, so these are "n Suppliers".
+  const suppliers = (n: number) => gemMultiplier(0.3 * n);
+
+  it('supplier bonus diminishes and caps at +100%', () => {
+    expect(suppliers(0)).toBe(1);
+    const one = suppliers(1);
+    const two = suppliers(2);
+    const three = suppliers(3);
     expect(one).toBeCloseTo(1.35, 5);
-    // Each additional Harvester adds strictly less than the previous one.
+    // Each additional Supplier adds strictly less than the previous one.
     expect(two - one).toBeLessThan(one - 1);
     expect(three - two).toBeLessThan(two - one);
-    expect(harvesterMultiplier(50)).toBeLessThanOrEqual(2);
+    expect(suppliers(50)).toBeLessThanOrEqual(2);
   });
 
-  it('scout speed caps at +25%', () => {
-    expect(scoutSpeedBonus(0)).toBe(0);
-    expect(scoutSpeedBonus(2)).toBeCloseTo(0.12, 5);
-    expect(scoutSpeedBonus(4)).toBeCloseTo(0.24, 5);
-    expect(scoutSpeedBonus(99)).toBe(0.25);
+  it('weights suppliers by how much economy they actually bring', () => {
+    // A Trader is worth appreciably more than a Wisp, which the old
+    // count-the-units rule could not express at all.
+    expect(gemMultiplier(UNIT_DEFS.trader.gemBonus)).toBeGreaterThan(
+      gemMultiplier(UNIT_DEFS.wisp.gemBonus),
+    );
+  });
+
+  it('speed aura caps at +25%', () => {
+    expect(speedBonus(0)).toBe(0);
+    expect(speedBonus(0.12)).toBeCloseTo(0.12, 5);
+    expect(speedBonus(0.24)).toBeCloseTo(0.24, 5);
+    expect(speedBonus(9)).toBe(0.25);
   });
 });
 
@@ -72,9 +83,9 @@ describe('fusion (§1.4)', () => {
   it('fuses three identical base units into one of the next tier', () => {
     const store = new EntityStore();
     const squad = [
-      spawnUnit(store, 0, 'striker', 0, 0, 0),
-      spawnUnit(store, 0, 'striker', 0, 1, 0),
-      spawnUnit(store, 0, 'striker', 0, 2, 0),
+      spawnUnit(store, 0, 'brute', 0, 0, 0),
+      spawnUnit(store, 0, 'brute', 0, 1, 0),
+      spawnUnit(store, 0, 'brute', 0, 2, 0),
     ];
     const out: FusionResult[] = [];
     const after = applyFusions(store, squad, out);
@@ -82,7 +93,7 @@ describe('fusion (§1.4)', () => {
     expect(out).toHaveLength(1);
     expect(after).toHaveLength(1);
     expect(after[0]!.tier).toBe(1);
-    expect(after[0]!.maxHp).toBeCloseTo(unitMaxHp('striker', 1), 5);
+    expect(after[0]!.maxHp).toBeCloseTo(unitMaxHp('brute', 1), 5);
     // Fusing heals to full — it should read as a reward.
     expect(after[0]!.hp).toBe(after[0]!.maxHp);
   });
@@ -90,9 +101,9 @@ describe('fusion (§1.4)', () => {
   it('does not fuse across different types or tiers', () => {
     const store = new EntityStore();
     const squad = [
-      spawnUnit(store, 0, 'striker', 0, 0, 0),
-      spawnUnit(store, 0, 'guard', 0, 1, 0),
-      spawnUnit(store, 0, 'marksman', 0, 2, 0),
+      spawnUnit(store, 0, 'brute', 0, 0, 0),
+      spawnUnit(store, 0, 'golem', 0, 1, 0),
+      spawnUnit(store, 0, 'archer', 0, 2, 0),
     ];
     const out: FusionResult[] = [];
     const after = applyFusions(store, squad, out);
@@ -103,7 +114,7 @@ describe('fusion (§1.4)', () => {
   it('cascades: nine base units become one elite', () => {
     const store = new EntityStore();
     const squad = Array.from({ length: 9 }, (_, i) =>
-      spawnUnit(store, 0, 'striker', 0, i, 0),
+      spawnUnit(store, 0, 'brute', 0, i, 0),
     );
     const out: FusionResult[] = [];
     const after = applyFusions(store, squad, out);
@@ -116,7 +127,7 @@ describe('fusion (§1.4)', () => {
 
   it('stops at the elite tier', () => {
     const store = new EntityStore();
-    const squad = Array.from({ length: 3 }, (_, i) => spawnUnit(store, 0, 'striker', 2, i, 0));
+    const squad = Array.from({ length: 3 }, (_, i) => spawnUnit(store, 0, 'brute', 2, i, 0));
     const out: FusionResult[] = [];
     const after = applyFusions(store, squad, out);
     expect(out).toHaveLength(0);
@@ -198,9 +209,8 @@ describe('World', () => {
 
   it('spawns the configured starting squad', () => {
     const w = newWorld(2);
-    const expected = MATCH.startingSquad.reduce((n, g) => n + g.count, 0);
-    expect(w.squadOf(0)).toHaveLength(expected);
-    expect(w.squadOf(1)).toHaveLength(expected);
+    expect(w.squadOf(0)).toHaveLength(MATCH.startingUnitCount);
+    expect(w.squadOf(1)).toHaveLength(MATCH.startingUnitCount);
   });
 
   it('populates the arena per config', () => {
@@ -275,7 +285,7 @@ describe('World', () => {
     for (let p = 0; p < 8; p++) {
       const leader = w.leaderOf(w.players.get(p + 1)!)!;
       while (w.squadOf(p).length < MATCH.squadCap) {
-        spawnUnit(w.store, p, 'striker', 0, leader.x, leader.y);
+        spawnUnit(w.store, p, 'brute', 0, leader.x, leader.y);
       }
     }
     const inputs = new Map<number, InputCommand>();

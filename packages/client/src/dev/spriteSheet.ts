@@ -8,6 +8,7 @@
  * game floor rather than dissolving into it.
  */
 
+import { UNIT_DEFS } from '@gem-rush/shared';
 import { buildSpriteAtlas, type SpriteKey } from '../render/sprites3d.ts';
 
 const CELL = 128;
@@ -21,8 +22,11 @@ const atlas = buildSpriteAtlas();
 const keys = Object.keys(atlas) as SpriteKey[];
 
 const canvas = document.getElementById('sheet') as HTMLCanvasElement;
-const cols = keys.length;
-const rows = 3;
+// A grid, not a strip: with 40-odd sprites a single row is thousands of pixels
+// wide and unreadable at any zoom that fits on a screen.
+const COLS = 10;
+const cols = Math.min(COLS, keys.length);
+const rows = Math.ceil(keys.length / COLS);
 const dpr = Math.min(devicePixelRatio || 1, 2);
 
 canvas.width = (cols * (CELL + PAD) + PAD) * dpr;
@@ -61,27 +65,21 @@ ctx.fillStyle = FLOOR;
 ctx.fillRect(0, 0, canvas.width, canvas.height);
 
 keys.forEach((key, i) => {
-  const x = PAD + i * (CELL + PAD);
+  const col = i % COLS;
+  const row = Math.floor(i / COLS);
+  const x = PAD + col * (CELL + PAD);
+  const y = PAD + row * (CELL + PAD + LABEL);
   const img = imageFor(key);
 
-  for (let row = 0; row < rows; row++) {
-    const y = PAD + row * (CELL + PAD + LABEL);
+  // Alternate tinted and untinted down the grid, so every sprite is seen both
+  // ways somewhere on the sheet without tripling its size.
+  if (row % 2 === 1) drawTinted(img, x, y, TINT);
+  else ctx.drawImage(img, x, y, CELL, CELL);
 
-    if (row === 2) {
-      ctx.fillStyle = '#d8dbe2';
-      ctx.fillRect(x, y, CELL, CELL);
-    }
-
-    if (row === 1) drawTinted(img, x, y, TINT);
-    else ctx.drawImage(img, x, y, CELL, CELL);
-
-    if (row === 0) {
-      ctx.fillStyle = '#8b93a7';
-      ctx.font = '12px ui-monospace, monospace';
-      ctx.textAlign = 'center';
-      ctx.fillText(key, x + CELL / 2, y + CELL + 14);
-    }
-  }
+  ctx.fillStyle = '#8b93a7';
+  ctx.font = '12px ui-monospace, monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(key, x + CELL / 2, y + CELL + 14);
 });
 
 // ── gameplay-scale strip ────────────────────────────────────────────────────
@@ -95,9 +93,10 @@ const BASE_SCALE = 44;
 /** World-space sizes, mirroring the per-kind branches in render/scene.ts. */
 const PLAY_SIZES: [SpriteKey, number][] = [
   ['leader', 0.95],
-  ['striker', 0.3 * 2.5],
-  ['guard', 0.34 * 2.5],
-  ['scout', 0.26 * 2.5],
+  ['brute', UNIT_DEFS.brute.radius * 2.5],
+  ['golem', UNIT_DEFS.golem.radius * 2.5],
+  ['archer', UNIT_DEFS.archer.radius * 2.5],
+  ['skeleton', UNIT_DEFS.skeleton.radius * 2.5],
   ['creep', 0.68],
   ['gem', 0.46],
   ['prop', 0.86],

@@ -295,6 +295,14 @@ export class Scene {
         s.tint = 0xffc857;
         s.width = s.height = 1.05;
         break;
+      case 'hatchling':
+        // Hatchling Run's rescue objective. Reuses the Fowl model, warm-tinted
+        // and small, so it reads as "a little one of those" without a
+        // dedicated sprite that only one of four modes would ever use.
+        s.texture = this.atlas.fowl;
+        s.tint = 0xffe9a8;
+        s.width = s.height = 0.62;
+        break;
       case 'creep':
         s.texture = this.atlas.creep;
         s.tint = 0x9aa3b5;
@@ -308,7 +316,7 @@ export class Scene {
       }
       case 'unit': {
         const def = e.unitType ? UNIT_DEFS[e.unitType as UnitType] : null;
-        s.texture = e.unitType ? this.atlas[e.unitType as UnitType] : this.atlas.striker;
+        s.texture = e.unitType ? this.atlas[e.unitType as UnitType] : this.atlas.brute;
         s.tint = def ? def.color : 0xffffff;
         const size = (def ? def.radius : 0.3) * 2.5 * (1 + e.tier * 0.26);
         s.width = s.height = size;
@@ -352,6 +360,9 @@ export class Scene {
       s.rotation = Math.sin(this.time * 2.2 + e.id) * 0.25;
     } else if (e.kind === 'chest') {
       bob = Math.sin(this.time * 2.4 + e.id) * 0.05;
+    } else if (e.kind === 'hatchling') {
+      // Hop rather than drift: it should look alive and worth going to get.
+      bob = Math.abs(Math.sin(this.time * 3.2 + e.id * 2.1)) * 0.16;
     }
 
     s.x = px;

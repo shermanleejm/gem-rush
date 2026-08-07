@@ -8,7 +8,13 @@
 
 import { GEM_YIELD, MATCH } from '../config/match.ts';
 import { MAP, zoneAt } from '../config/map.ts';
-import { UNIT_DEFS, unitMaxHp, type UnitTier, type UnitType } from '../config/units.ts';
+import {
+  PLAYABLE_UNIT_TYPES,
+  UNIT_DEFS,
+  unitMaxHp,
+  type UnitTier,
+  type UnitType,
+} from '../config/units.ts';
 import type { Rng } from '../math/rng.ts';
 import { TEAM_NEUTRAL, type Entity, type EntityStore } from './entities.ts';
 import { findOpenTile, isWallAt } from './mapgen.ts';
@@ -112,7 +118,7 @@ export function spawnCreep(
   // Tougher camps are worth more, so contesting the centre pays for its risk.
   e.value = Math.max(1, Math.round(GEM_YIELD.creep * strength));
   e.campId = campId;
-  e.unitType = 'striker'; // creeps reuse the Striker attack profile
+  e.unitType = 'brute'; // creeps reuse the Brute attack profile
   e.tier = 0;
   return e;
 }
@@ -125,6 +131,19 @@ export function spawnChest(store: EntityStore, x: number, y: number): Entity {
   e.radius = 0.5;
   e.maxHp = 1;
   e.hp = 1;
+  return e;
+}
+
+/** A rescue collectible for Hatchling Run: walk over it to bank it. */
+export function spawnHatchling(store: EntityStore, x: number, y: number): Entity {
+  const e = store.spawn('hatchling');
+  e.x = x;
+  e.y = y;
+  e.team = TEAM_NEUTRAL;
+  e.radius = 0.3;
+  e.maxHp = 1;
+  e.hp = 1;
+  e.value = 1;
   return e;
 }
 
@@ -156,6 +175,8 @@ export function spawnUnit(
   const def = UNIT_DEFS[type];
   const e = store.spawn('unit');
   e.team = team;
+  // Callers that put a unit on a shared side override this straight after.
+  e.alliance = team;
   e.unitType = type;
   e.tier = tier;
   e.x = x;
@@ -170,6 +191,7 @@ export function spawnUnit(
 export function spawnLeader(store: EntityStore, team: number, x: number, y: number): Entity {
   const e = store.spawn('leader');
   e.team = team;
+  e.alliance = team;
   e.x = x;
   e.y = y;
   e.radius = 0.35;
@@ -238,9 +260,16 @@ export function populateArena(
   return { camps, chestSpots };
 }
 
-/** Chest offer pool, gated by match time (§1.5). */
+/**
+ * Chest offer pool, gated by match time (§1.5).
+ *
+ * Summoned helpers are excluded by construction — `PLAYABLE_UNIT_TYPES` filters
+ * them — so a chest can never offer a Skeleton, which would be a dead pick and
+ * would let a player bypass the Summoner that is supposed to earn it.
+ */
 export function chestPool(elapsedSeconds: number): UnitType[] {
-  const early = (Object.keys(UNIT_DEFS) as UnitType[]).filter((t) => UNIT_DEFS[t].earlyPool);
-  if (elapsedSeconds < MATCH.lateUnlockSeconds) return early;
-  return Object.keys(UNIT_DEFS) as UnitType[];
+  if (elapsedSeconds < MATCH.lateUnlockSeconds) {
+    return PLAYABLE_UNIT_TYPES.filter((t) => UNIT_DEFS[t].earlyPool);
+  }
+  return PLAYABLE_UNIT_TYPES.slice();
 }

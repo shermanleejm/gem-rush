@@ -14,8 +14,8 @@ import { distanceSq } from '../math/vec2.ts';
 import { TEAM_NEUTRAL, type Entity, type EntityId, type EntityStore } from './entities.ts';
 
 /** Lower number = higher priority, matching the brief's ordering. */
-function targetPriority(target: Entity, attackerTeam: number): number {
-  if (target.kind === 'unit' && target.team !== attackerTeam) return 0;
+function targetPriority(target: Entity, attackerAlliance: number): number {
+  if (target.kind === 'unit' && target.alliance !== attackerAlliance) return 0;
   if (target.kind === 'creep') return 1;
   if (target.kind === 'prop' || target.kind === 'node') return 2;
   return Number.MAX_SAFE_INTEGER;
@@ -27,7 +27,9 @@ function isValidTarget(target: Entity, attacker: Entity): boolean {
   if (target.kind === 'leader' || target.kind === 'gem' || target.kind === 'chest') return false;
   if (target.hp <= 0) return false;
 
-  if (target.kind === 'unit') return target.team !== attacker.team;
+  // Alliance, not team: duo partners and co-op squads share an alliance and
+  // must be untargetable to each other even though they are separate teams.
+  if (target.kind === 'unit') return target.alliance !== attacker.alliance;
   if (target.kind === 'creep') return attacker.team !== TEAM_NEUTRAL;
   if (target.kind === 'prop' || target.kind === 'node') return attacker.team !== TEAM_NEUTRAL;
   return false;
@@ -48,7 +50,7 @@ export function acquireTarget(store: EntityStore, attacker: Entity, range: numbe
   for (const candidate of store.items) {
     if (!isValidTarget(candidate, attacker)) continue;
 
-    const priority = targetPriority(candidate, attacker.team);
+    const priority = targetPriority(candidate, attacker.alliance);
     if (priority > bestPriority) continue;
 
     // Range is measured surface-to-surface, so a fat Guard doesn't have to
@@ -123,21 +125,45 @@ export function resolveAttack(
   if (!attacker.unitType) return;
   const def = UNIT_DEFS[attacker.unitType];
 
+  // A stunned unit does nothing at all, including ticking its cooldown down —
+  // otherwise a stun would bank up attacks and the unit would fire the instant
+  // it recovered, giving the stun away for free.
+  if (attacker.stunRemaining > 0) return;
+
   attacker.cooldown -= dt;
   if (attacker.cooldown > 0) return;
 
-  // Menders don't attack (§1.5) — healing is handled separately.
+  // Pure healers don't attack (§1.5) — healing is handled separately.
   if (def.healPerSecond > 0 && def.damage === 0) return;
 
   const targetId = acquireTarget(store, attacker, def.attackRange);
   attacker.targetId = targetId;
-  if (targetId === 0) return;
+  if (targetId === 0) {
+    // Losing the target drops the streak, so a ramp has to be earned by holding
+    // one enemy rather than accumulated across a whole fight.
+    attacker.rampStacks = 0;
+    attacker.rampTargetId = 0;
+    return;
+  }
 
   const target = store.get(targetId);
   if (!target) return;
 
   attacker.cooldown = def.attackInterval;
-  const dmg = unitDamage(attacker.unitType, attacker.tier);
+
+  if (def.rampMax > 1) {
+    if (attacker.rampTargetId === target.id) attacker.rampStacks += 1;
+    else {
+      attacker.rampTargetId = target.id;
+      attacker.rampStacks = 0;
+    }
+  }
+  const ramp =
+    def.rampMax > 1
+      ? Math.min(def.rampMax, 1 + def.rampPerHit * attacker.rampStacks)
+      : 1;
+
+  const dmg = unitDamage(attacker.unitType, attacker.tier) * ramp;
   const killed = applyDamage(target, dmg);
   out.push({ sourceId: attacker.id, targetId: target.id, amount: dmg, killed, x: target.x, y: target.y });
 
@@ -145,11 +171,41 @@ export function resolveAttack(
     applySplash(store, attacker, target.x, target.y, def.splashRadius, dmg * 0.6, target.id, out);
   }
 
-  if (def.slowFactor > 0 && target.kind === 'unit') {
-    // Refresh rather than stack, so multiple Wardens don't compound into a stun.
-    target.slowRemaining = Math.max(target.slowRemaining, def.slowDuration);
-    target.slowFactor = Math.max(target.slowFactor, def.slowFactor);
+  if (def.lifesteal > 0) {
+    attacker.hp = Math.min(attacker.maxHp, attacker.hp + dmg * def.lifesteal);
   }
+
+  // Crowd control only lands on units. Applying it to props and creeps would
+  // read as nothing happening, and stunning a prop is meaningless.
+  if (target.kind === 'unit' || target.kind === 'creep') {
+    if (def.slowFactor > 0) {
+      // Refresh rather than stack, so multiple chillers don't compound into a stun.
+      target.slowRemaining = Math.max(target.slowRemaining, def.slowDuration);
+      target.slowFactor = Math.max(target.slowFactor, def.slowFactor);
+    }
+    if (def.stunDuration > 0) {
+      target.stunRemaining = Math.max(target.stunRemaining, def.stunDuration);
+    }
+    if (def.knockback > 0) {
+      pushAway(attacker, target, def.knockback);
+    }
+  }
+}
+
+/**
+ * Shove a target directly away from its attacker.
+ *
+ * Position is written rather than velocity: units are steered to formation
+ * slots every tick, so an impulse on velocity would be overwritten before it
+ * moved anything. Displacing the position means the unit has to walk back.
+ */
+function pushAway(attacker: Entity, target: Entity, distance: number): void {
+  const dx = target.x - attacker.x;
+  const dy = target.y - attacker.y;
+  const len = Math.hypot(dx, dy);
+  if (len < 1e-4) return;
+  target.x += (dx / len) * distance;
+  target.y += (dy / len) * distance;
 }
 
 export interface HealEvent {
@@ -205,7 +261,7 @@ export function resolveHealing(
   out.push({ sourceId: healer.id, targetId: best.id, amount });
 }
 
-/** Tick down slow timers. */
+/** Tick down slow and stun timers. */
 export function decaySlow(unit: Entity, dt: number): void {
   if (unit.slowRemaining > 0) {
     unit.slowRemaining -= dt;
@@ -213,6 +269,10 @@ export function decaySlow(unit: Entity, dt: number): void {
       unit.slowRemaining = 0;
       unit.slowFactor = 0;
     }
+  }
+  if (unit.stunRemaining > 0) {
+    unit.stunRemaining -= dt;
+    if (unit.stunRemaining < 0) unit.stunRemaining = 0;
   }
 }
 

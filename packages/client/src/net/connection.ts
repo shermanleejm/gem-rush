@@ -22,6 +22,8 @@ import {
   type LobbyPlayer,
   type MatchConfig,
   type PlayerWire,
+  type GameModeId,
+  DEFAULT_MODE,
   type ServerMessage,
   type SnapshotMsg,
   type UnitType,
@@ -65,7 +67,7 @@ interface TimedSnapshot {
 type Listener = {
   onLobby?: (players: LobbyPlayer[], hostId: number) => void;
   onWelcome?: (playerId: number, config: MatchConfig, state: string) => void;
-  onStart?: (assignments: { id: number; index: number; name: string }[]) => void;
+  onStart?: (assignments: { id: number; index: number; name: string }[], mode: GameModeId) => void;
   onMap?: (size: number, tiles: Uint8Array, pads: { x: number; y: number }[]) => void;
   onEnd?: (standings: { id: number; name: string; gems: number }[]) => void;
   onEvents?: (events: WorldEvent[]) => void;
@@ -85,6 +87,8 @@ export class Connection {
   playerIndex = 0;
   config: MatchConfig = MATCH;
   players: PlayerWire[] = [];
+  /** Mode for the current match; the host draws it and tells us. */
+  mode: GameModeId = DEFAULT_MODE;
   phase = 'lobby';
   timeRemaining = 0;
   assignments = new Map<number, number>();
@@ -170,7 +174,8 @@ export class Connection {
         }
         this.buffer.length = 0;
         this.predicted.valid = false;
-        this.listener.onStart?.(msg.assignments);
+        this.mode = msg.mode;
+        this.listener.onStart?.(msg.assignments, msg.mode);
         break;
 
       case 'map': {
@@ -262,7 +267,28 @@ export class Connection {
     this.transport?.send(msg);
   }
 
-  sendInput(dirX: number, dirY: number, dt: number, chestChoice?: number): void {
+  /**
+   * Send a draft pick immediately, rather than waiting for the input pump.
+   *
+   * Movement rides a ~30 Hz pump driven by the render loop, which is the right
+   * home for a continuously-changing value. A one-shot menu choice is not that:
+   * routing it through the pump makes the pick depend on the render loop still
+   * running, and browsers stop `requestAnimationFrame` whenever the tab is
+   * hidden or the window occluded. A player who picks and then tabs away would
+   * silently get the auto-pick instead. Sending on click removes the coupling.
+   */
+  sendDraftChoice(index: number): void {
+    this.seq++;
+    this.send({ t: 'input', seq: this.seq, dirX: 0, dirY: 0, draftChoice: index });
+  }
+
+  sendInput(
+    dirX: number,
+    dirY: number,
+    dt: number,
+    chestChoice?: number,
+    draftChoice?: number,
+  ): void {
     this.seq++;
     this.pending.push({ seq: this.seq, dirX, dirY, dt });
     // Cap the replay list; if it grows this large the connection is gone and
@@ -274,6 +300,7 @@ export class Connection {
       dirX,
       dirY,
       ...(chestChoice !== undefined ? { chestChoice } : {}),
+      ...(draftChoice !== undefined ? { draftChoice } : {}),
     });
   }
 
