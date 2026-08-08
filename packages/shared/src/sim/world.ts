@@ -50,6 +50,7 @@ import {
   CREEP_RANGE,
   MINE,
   applyBattleModTerrain,
+  buildChestOffer,
   chestPool,
   populateArena,
   rollChestRarity,
@@ -1229,13 +1230,13 @@ export class World {
         const rarity = this.battleMod.forceRarity ?? e.rarity ?? 'common';
         if (player.coins < this.chestPriceFor(player, rarity)) continue;
 
-        const pool = chestPool(rarity);
-        const options: UnitType[] = [];
-        const shuffled = this.rng.shuffle(pool.slice());
-        for (const t of shuffled) {
-          if (options.length >= MATCH.chestOfferCount) break;
-          options.push(t);
-        }
+        const options = buildChestOffer(
+          this.rng,
+          chestPool(rarity),
+          this.squadOf(player.index),
+          MATCH.chestOfferCount,
+          this.battleMod.maxTier,
+        );
         player.offer = options;
         player.offerChestId = e.id;
         this.events.push({

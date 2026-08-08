@@ -11,6 +11,7 @@ import { COIN_YIELD, GEM_YIELD, MATCH } from '../config/match.ts';
 import type { BattleMod } from '../config/battleMods.ts';
 import { MAP, TILE_WALL, zoneAt } from '../config/map.ts';
 import {
+  MAX_TIER,
   RARITIES,
   UNIT_DEFS,
   unitsOfRarity,
@@ -21,6 +22,7 @@ import {
 } from '../config/units.ts';
 import type { Rng } from '../math/rng.ts';
 import { TEAM_NEUTRAL, type Entity, type EntityStore } from './entities.ts';
+import { untilFusion } from './fusion.ts';
 import { findOpenTile, isWallAt, tileIndex } from './mapgen.ts';
 
 /**
@@ -475,6 +477,75 @@ export function chestPool(rarity: Rarity): UnitType[] {
   // Never hand back an empty pool: a chest with nothing to offer would consume
   // the player's walk-up and silently do nothing.
   return pool.length > 0 ? pool : unitsOfRarity('common');
+}
+
+/**
+ * How badly this player wants to be offered `type`, relative to the rest.
+ *
+ * Chests used to deal a flat shuffle of the rarity's roster, which meant the
+ * most common thing a chest could do was hand you a fourth Brute when you
+ * already had a maxed one — a strictly dead pick, since a topped-out unit
+ * cannot fuse again. Three offers drawn uniformly from a dozen types made that
+ * happen constantly, and the fusion system is the most interesting decision in
+ * the game to be routing players away from.
+ *
+ * So the weights follow how much closer the pick would take you to a fusion:
+ *
+ *  - **one short of fusing** is the pick that actually completes something, and
+ *    is what should turn up when you are sitting on two of a kind.
+ *  - **no mega of this type yet** is the general case the request is about —
+ *    anything you have not topped out is still a live fusion line.
+ *  - **already maxed** stays possible, because a spare body still fights and
+ *    still soaks damage; it just stops crowding out the picks that build.
+ *
+ * Read off the *current* squad rather than a per-match history, so losing a
+ * mega in a fight puts that type back in rotation — which is the behaviour you
+ * want when you are rebuilding.
+ */
+export function chestOfferWeight(
+  squad: Entity[],
+  type: UnitType,
+  maxTier: UnitTier = MAX_TIER,
+): number {
+  for (const u of squad) {
+    if (u.alive && u.unitType === type && u.tier >= maxTier) return 1;
+  }
+  for (let tier = 0; tier < maxTier; tier++) {
+    if (untilFusion(squad, type, tier as UnitTier) === 1) return 8;
+  }
+  return 4;
+}
+
+/**
+ * Draw `count` distinct types for a chest, weighted toward unfinished fusions.
+ *
+ * Weighted sampling without replacement: each draw picks proportionally, then
+ * removes the winner so a chest never offers the same unit twice.
+ */
+export function buildChestOffer(
+  rng: Rng,
+  pool: readonly UnitType[],
+  squad: Entity[],
+  count: number,
+  maxTier: UnitTier = MAX_TIER,
+): UnitType[] {
+  const remaining = pool.slice();
+  const weights = remaining.map((t) => chestOfferWeight(squad, t, maxTier));
+  const offer: UnitType[] = [];
+
+  while (offer.length < count && remaining.length > 0) {
+    let total = 0;
+    for (const w of weights) total += w;
+    let roll = rng.float() * total;
+    let i = 0;
+    // The final index is the guard against float error leaving `roll` just
+    // above the running total.
+    while (i < remaining.length - 1 && (roll -= weights[i]!) > 0) i++;
+    offer.push(remaining[i]!);
+    remaining.splice(i, 1);
+    weights.splice(i, 1);
+  }
+  return offer;
 }
 
 /**
