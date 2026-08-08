@@ -370,6 +370,22 @@ button.secondary {
 }
 
 /* Dash. Big enough for a thumb, bottom-right where a thumb already is. */
+/* Controls you might be holding while steering.
+   The gesture suppression that matters is the event binding (see `onPress`);
+   these are the companion rules. `touch-action` is already covered by <body>,
+   since the effective behaviour is intersected across ancestors — it is
+   restated here so the intent survives someone rearranging the HUD out of
+   <body>'s chain. The callout and selection rules are doing real work: without
+   them a held button raises iOS's text-selection UI, which cancels the pointer
+   mid-press. */
+.dash,
+.offer button {
+  touch-action: none;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
 .dash {
   position: absolute;
   right: max(14px, env(safe-area-inset-right));

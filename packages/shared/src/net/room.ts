@@ -174,6 +174,7 @@ export class Room {
           dirY: msg.dirY,
           ...(msg.chestChoice !== undefined ? { chestChoice: msg.chestChoice } : {}),
           ...(msg.draftChoice !== undefined ? { draftChoice: msg.draftChoice } : {}),
+          ...(msg.dash ? { dash: true } : {}),
         });
         return false;
       }
@@ -275,6 +276,7 @@ export class Room {
       ...input,
       chestChoice: input.chestChoice ?? m.input.chestChoice,
       draftChoice: input.draftChoice ?? m.input.draftChoice,
+      dash: input.dash || m.input.dash,
     };
   }
 
@@ -432,11 +434,11 @@ export class Room {
     this.stats.tickMs = Date.now() - t0;
     this.stats.entities = world.store.liveCount;
 
-    // Chest choices are one-shot: clear after the tick that consumed them so
-    // the player doesn't buy three chests from one tap.
+    // One-shot inputs are cleared after the tick that consumed them, so one tap
+    // does not buy three chests or spend three dashes.
     for (const m of this.members.values()) {
-      if (m.input.chestChoice !== undefined || m.input.draftChoice !== undefined) {
-        m.input = { ...m.input, chestChoice: undefined, draftChoice: undefined };
+      if (m.input.chestChoice !== undefined || m.input.draftChoice !== undefined || m.input.dash) {
+        m.input = { ...m.input, chestChoice: undefined, draftChoice: undefined, dash: undefined };
       }
     }
 

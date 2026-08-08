@@ -37,6 +37,8 @@ export interface InputMsg {
   chestChoice?: number;
   /** Index into the opening draft offer, when choosing a starting character. */
   draftChoice?: number;
+  /** Set on the tick the player taps dash. The sim ignores it on cooldown. */
+  dash?: boolean;
 }
 
 export interface StartRequestMsg {

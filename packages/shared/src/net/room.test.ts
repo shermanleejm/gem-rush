@@ -39,6 +39,49 @@ describe('Room input handling', () => {
     expect(member.input.chestChoice, 'a consumed choice must not repeat').toBeUndefined();
   });
 
+  it('forwards a dash to the simulation', () => {
+    // Regression: the client sent `dash: true`, `InputMsg` had no such field
+    // and the host never copied it, so dash did nothing at all — for everyone,
+    // on every device. It read as a phone multi-touch problem because moving is
+    // when you reach for it, and the sim also drops a dash with no direction.
+    const { room, member } = seated();
+    room.setReady(member.id, true);
+    room.start();
+    room.handle(KEY, { t: 'input', seq: 1, dirX: 0, dirY: 0, draftChoice: 0 });
+    room.advance(TICK_DT);
+
+    const player = room.world!.players.get(member.id)!;
+    expect(player.dashCooldown).toBe(0);
+
+    room.handle(KEY, { t: 'input', seq: 2, dirX: 1, dirY: 0, dash: true });
+    room.advance(TICK_DT);
+    expect(player.dashCooldown, 'the dash never reached the sim').toBeGreaterThan(0);
+  });
+
+  it('needs a direction to dash, and spends the tap either way', () => {
+    // Dash is a burst along your heading, so standing still cannot dash. The
+    // tap must still be cleared, or it would fire the instant you next moved.
+    const { room, member } = seated();
+    room.setReady(member.id, true);
+    room.start();
+    room.handle(KEY, { t: 'input', seq: 1, dirX: 0, dirY: 0, draftChoice: 0 });
+    room.advance(TICK_DT);
+
+    room.handle(KEY, { t: 'input', seq: 2, dirX: 0, dirY: 0, dash: true });
+    room.advance(TICK_DT);
+    const player = room.world!.players.get(member.id)!;
+    expect(player.dashCooldown, 'a standing dash should be refused').toBe(0);
+    expect(member.input.dash, 'the spent tap should not linger').toBeFalsy();
+  });
+
+  it('survives the movement pump, like the other one-shot inputs', () => {
+    // Same 30 Hz pump versus 20 Hz tick race that used to eat draft picks.
+    const { room, member } = seated();
+    room.handle(KEY, { t: 'input', seq: 1, dirX: 1, dirY: 0, dash: true });
+    room.handle(KEY, { t: 'input', seq: 2, dirX: 1, dirY: 0 });
+    expect(member.input.dash, 'the dash was clobbered by a movement input').toBe(true);
+  });
+
   it('starts the match as soon as the only human has drafted', () => {
     // Bots pick the instant the draft opens, so one human picking is the last
     // thing the draft is waiting on — play should begin there, not on the timer.

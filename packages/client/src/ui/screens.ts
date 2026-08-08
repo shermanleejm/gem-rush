@@ -33,6 +33,34 @@ function punch(node: HTMLElement): void {
   node.classList.add('punch');
 }
 
+/**
+ * Bind an in-match control to *press*, not click.
+ *
+ * iOS Safari only raises `click` for a tap it considers a single-finger
+ * gesture. With a thumb already down on the joystick, a second finger on a
+ * button fires `pointerdown` and then nothing — so on a phone you could move,
+ * or you could dash, and never both at once. Every control you might hit while
+ * steering has this problem, which is the dash button and the chest offer.
+ *
+ * Firing on `pointerdown` also takes a frame of latency out of controls that
+ * get mashed mid-fight, which is the behaviour a game button wants anyway.
+ *
+ * `click` is kept purely for keyboard activation: Enter and Space synthesise a
+ * click with `detail === 0`, where a pointer-driven click always reports at
+ * least 1, so the two are told apart without ever firing twice.
+ */
+function onPress(node: HTMLElement, handler: () => void): void {
+  node.addEventListener('pointerdown', (e) => {
+    // Also suppresses the synthetic mouse events and the double-tap-to-zoom
+    // delay that would otherwise follow the touch.
+    e.preventDefault();
+    handler();
+  });
+  node.addEventListener('click', (e) => {
+    if (e.detail === 0) handler();
+  });
+}
+
 function el<K extends keyof HTMLElementTagNameMap>(
   tag: K,
   className?: string,
@@ -504,10 +532,7 @@ export function createHud(onDash: () => void = () => {}): HudHandle {
   dashBtn.innerHTML = '<span>DASH</span>';
   const dashSweep = el('div', 'dash-sweep');
   dashBtn.appendChild(dashSweep);
-  dashBtn.onclick = (e) => {
-    e.preventDefault();
-    onDash();
-  };
+  onPress(dashBtn, onDash);
 
   root.append(rankBox, top, topRight, dashBtn);
   document.body.appendChild(root);
@@ -598,7 +623,7 @@ export function createHud(onDash: () => void = () => {}): HudHandle {
         const role = el('div', 'role');
         role.textContent = def.role;
         b.append(sw, nm, role);
-        b.onclick = () => onPick(i);
+        onPress(b, () => onPick(i));
         offer!.appendChild(b);
       });
       const cost = el('div', 'pill');
