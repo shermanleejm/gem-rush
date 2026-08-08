@@ -455,6 +455,8 @@ export interface HudHandle {
   punchCoins: () => void;
   /** 0 = ready, 1 = just used. Drives the dash button's cooldown sweep. */
   setDashCooldown: (fraction: number) => void;
+  /** Seconds until the centre mine blows, or null to hide the countdown. */
+  setMineCountdown: (seconds: number | null) => void;
   setScores: (
     rows: { id: number; name: string; gems: number; out?: boolean }[],
     myId: number,
@@ -480,7 +482,11 @@ export function createHud(onDash: () => void = () => {}): HudHandle {
   const top = el('div', 'hud-top');
   const timer = el('div', 'pill timer', '4:00');
   const modePill = el('div', 'pill mode', '');
-  top.append(timer, modePill);
+  // Directly under the clock, because it is a second clock and the decision it
+  // drives — break off and run for the middle — is made against the first one.
+  const mineTimer = el('div', 'pill mine-timer', '');
+  mineTimer.style.display = 'none';
+  top.append(timer, modePill, mineTimer);
 
   const topRight = el('div', 'hud-topright');
   const coins = el('div', 'pill coins', '0');
@@ -542,6 +548,16 @@ export function createHud(onDash: () => void = () => {}): HudHandle {
       const pct = Math.round(clamp01(fraction) * 100);
       dashSweep.style.height = `${pct}%`;
       dashBtn.classList.toggle('ready', pct === 0);
+    },
+    setMineCountdown(seconds) {
+      if (seconds === null || seconds <= 0) {
+        mineTimer.style.display = 'none';
+        return;
+      }
+      mineTimer.style.display = '';
+      const label = `⛏ MINE BLOWS IN ${Math.ceil(seconds)}`;
+      if (mineTimer.textContent !== label) mineTimer.textContent = label;
+      mineTimer.classList.toggle('imminent', seconds <= 5);
     },
     setMode(label) {
       if (modePill.textContent !== label) modePill.textContent = label;

@@ -57,6 +57,7 @@ export type SpriteKey =
   | 'gem'
   | 'prop'
   | 'node'
+  | 'mine'
   | 'chest'
   | 'ring'
   | 'spark'
@@ -140,6 +141,58 @@ function nodeModel(): Group {
     const shard = mesh(new ConeGeometry(r, h, 5), gemMat);
     shard.position.set(x, h / 2 - 0.5, z);
     shard.rotation.z = tilt;
+    g.add(shard);
+  }
+  return g;
+}
+
+/**
+ * The gem mine at the centre of every arena.
+ *
+ * It borrowed the ore-node sprite at first, which was a mistake the contact
+ * sheet made obvious: scaled up four times it read as a large rock rather than
+ * the landmark the whole map is built around, and it was the same silhouette as
+ * the deposits scattered everywhere else.
+ *
+ * So it is built the other way up. A dark stone rim encircles a pit, and the
+ * crystals grow *out* of that ring rather than off bare ground — the rim is
+ * what says "a place you stand in" instead of "a thing in your way", and it
+ * gives the sprite a wide flat base that stays legible from across the arena.
+ */
+function mineModel(): Group {
+  const g = new Group();
+
+  // Stone rim. Squashed flat so it reads as ground-level from the game's
+  // three-quarter camera rather than as a floating ring.
+  const rim = mesh(new TorusGeometry(0.72, 0.19, 8, 20), darkMat);
+  rim.rotation.x = Math.PI / 2;
+  rim.scale.set(1, 1, 0.55);
+  rim.position.y = -0.34;
+  g.add(rim);
+
+  // The pit inside it, dark and slightly sunken.
+  const pit = mesh(new CylinderGeometry(0.6, 0.52, 0.16, 20), darkMat);
+  pit.position.y = -0.4;
+  g.add(pit);
+
+  // A tall centre crystal with a ring of shorter ones leaning outward, so the
+  // silhouette is a cluster rather than a single spike.
+  const core = mesh(new OctahedronGeometry(0.42), gemMat);
+  core.position.y = 0.22;
+  core.rotation.y = 0.5;
+  g.add(core);
+
+  for (const [angle, dist, r, h] of [
+    [0.4, 0.5, 0.17, 0.72],
+    [2.4, 0.54, 0.14, 0.56],
+    [4.3, 0.48, 0.15, 0.64],
+    [5.5, 0.58, 0.12, 0.44],
+  ] as const) {
+    const shard = mesh(new ConeGeometry(r, h, 5), gemMat);
+    shard.position.set(Math.cos(angle) * dist, h / 2 - 0.34, Math.sin(angle) * dist);
+    // Lean away from the centre, as though pushed out of the pit.
+    shard.rotation.z = -Math.cos(angle) * 0.3;
+    shard.rotation.x = Math.sin(angle) * 0.3;
     g.add(shard);
   }
   return g;
@@ -324,6 +377,7 @@ function fallbackAtlas(): SpriteAtlas {
   });
   atlas.prop = bakeFlat((ctx) => boxy(ctx, c * 0.78));
   atlas.node = bakeFlat((ctx) => boxy(ctx, c * 0.7));
+  atlas.mine = bakeFlat((ctx) => boxy(ctx, c * 0.9));
   atlas.chest = bakeFlat((ctx) => boxy(ctx, c * 0.82));
   return atlas;
 }
@@ -380,6 +434,7 @@ export function buildSpriteAtlas(): SpriteAtlas {
   atlas.gem = bakeModel(renderer, scene, camera, gemModel());
   atlas.prop = bakeModel(renderer, scene, camera, propModel());
   atlas.node = bakeModel(renderer, scene, camera, nodeModel());
+  atlas.mine = bakeModel(renderer, scene, camera, mineModel());
   atlas.chest = bakeModel(renderer, scene, camera, chestModel());
 
   Object.assign(atlas, overlayArt());

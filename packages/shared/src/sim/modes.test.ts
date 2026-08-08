@@ -249,7 +249,7 @@ describe('squad-versus-squad', () => {
     // happened to fall inside attack range, so two squads could pass through
     // each other trading almost nothing. Placed five tiles apart — inside the
     // engage radius but far outside any attack range — they must now commit.
-    const w = new World(5150, 2, 'gemHunt', 'quarry');
+    const w = new World(5150, 2, 'gemHunt', 'bustervalley');
     const a = w.addPlayer(1, 'A');
     const b = w.addPlayer(2, 'B');
     w.start();
@@ -296,7 +296,7 @@ describe('squad-versus-squad', () => {
   });
 
   it('keeps units on a leash so a squad cannot be baited apart', () => {
-    const w = new World(5151, 2, 'gemHunt', 'quarry');
+    const w = new World(5151, 2, 'gemHunt', 'bustervalley');
     const a = w.addPlayer(1, 'A');
     const b = w.addPlayer(2, 'B');
     w.start();

@@ -26,6 +26,8 @@ import {
   DEFAULT_MODE,
   type BattleModId,
   DEFAULT_BATTLE_MOD,
+  type MapId,
+  DEFAULT_MAP,
   type ServerMessage,
   type SnapshotMsg,
   type UnitType,
@@ -93,6 +95,8 @@ export class Connection {
   mode: GameModeId = DEFAULT_MODE;
   /** The twist rolled for this match. */
   battleMod: BattleModId = DEFAULT_BATTLE_MOD;
+  /** Which arena we are on, so the terrain renders in its world's colours. */
+  mapId: MapId = DEFAULT_MAP;
   phase = 'lobby';
   timeRemaining = 0;
   assignments = new Map<number, number>();
@@ -190,6 +194,7 @@ export class Connection {
         this.predicted.valid = false;
         this.mode = msg.mode;
         this.battleMod = msg.battleMod;
+        this.mapId = msg.map;
         this.listener.onStart?.(msg.assignments, msg.mode);
         break;
 

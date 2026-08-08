@@ -9,6 +9,7 @@ export * from './config/modes.ts';
 export * from './config/battleMods.ts';
 export * from './config/map.ts';
 export * from './config/maps.ts';
+export * from './config/arenaData.ts';
 
 export * from './sim/entities.ts';
 export * from './sim/auras.ts';

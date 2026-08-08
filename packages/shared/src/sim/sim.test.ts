@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { MAP, TILE_WALL } from '../config/map.ts';
+import { MAP, TILE_FLOOR, TILE_GRASS, TILE_WALL } from '../config/map.ts';
 import { MATCH, TICK_DT } from '../config/match.ts';
 import { UNIT_DEFS, gemMultiplier, speedBonus, unitMaxHp } from '../config/units.ts';
 import { Rng } from '../math/rng.ts';
 import { EntityStore } from './entities.ts';
 import { applyFusions, type FusionResult } from './fusion.ts';
-import { generateMap, isWallAt, tileIndex } from './mapgen.ts';
+import { decodeTiles, isWallAt } from './mapgen.ts';
 import { spawnUnit } from './spawning.ts';
 import { World, type InputCommand } from './world.ts';
 
@@ -136,64 +136,25 @@ describe('fusion (§1.4)', () => {
 });
 
 describe('mapgen (§1.8)', () => {
-  it('is deterministic for a seed', () => {
-    const a = generateMap(new Rng(42), 6);
-    const b = generateMap(new Rng(42), 6);
-    expect(Array.from(a.tiles)).toEqual(Array.from(b.tiles));
-    expect(a.homePads).toEqual(b.homePads);
+  // Arena layouts themselves — fairness, connectivity, cover — are pinned per
+  // map in maps.test.ts. What belongs here is the encoding they arrive in.
+  it('round-trips a run-length encoded arena', () => {
+    const tiles = decodeTiles(`${MAP.size * MAP.size - 3}a2b1c`);
+    expect(tiles).toHaveLength(MAP.size * MAP.size);
+    expect(tiles[0]).toBe(TILE_FLOOR);
+    expect(tiles[MAP.size * MAP.size - 2]).toBe(TILE_WALL);
+    expect(tiles[MAP.size * MAP.size - 1]).toBe(TILE_GRASS);
   });
 
-  it('gives every player a home pad on open floor', () => {
-    for (const seed of [1, 2, 3, 99, 12345]) {
-      const map = generateMap(new Rng(seed), 8);
-      expect(map.homePads).toHaveLength(8);
-      for (const pad of map.homePads) {
-        expect(isWallAt(map.tiles, pad.x, pad.y, map.size)).toBe(false);
-      }
-    }
+  it('refuses an arena that is not exactly one grid', () => {
+    expect(() => decodeTiles('10a')).toThrow(/decoded to 10 tiles/);
   });
 
-  it('seals the border so nothing can leave the arena', () => {
-    const map = generateMap(new Rng(5), 4);
-    for (let i = 0; i < map.size; i++) {
-      expect(map.tiles[tileIndex(i, 0, map.size)]).toBe(TILE_WALL);
-      expect(map.tiles[tileIndex(0, i, map.size)]).toBe(TILE_WALL);
-      expect(map.tiles[tileIndex(i, map.size - 1, map.size)]).toBe(TILE_WALL);
-      expect(map.tiles[tileIndex(map.size - 1, i, map.size)]).toBe(TILE_WALL);
-    }
-  });
-
-  it('keeps every home pad connected to the centre', () => {
-    // The contested centre must be reachable from every spawn, or a player is
-    // locked out of the whole point of the map.
-    for (const seed of [1, 7, 13, 256, 90210]) {
-      const map = generateMap(new Rng(seed), 8);
-      const seen = new Uint8Array(map.size * map.size);
-      const start = tileIndex(Math.floor(map.size / 2), Math.floor(map.size / 2), map.size);
-      const stack = [start];
-      seen[start] = 1;
-      while (stack.length) {
-        const idx = stack.pop()!;
-        const x = idx % map.size;
-        const y = Math.floor(idx / map.size);
-        for (const [nx, ny] of [
-          [x + 1, y],
-          [x - 1, y],
-          [x, y + 1],
-          [x, y - 1],
-        ] as const) {
-          if (nx < 0 || ny < 0 || nx >= map.size || ny >= map.size) continue;
-          const n = tileIndex(nx, ny, map.size);
-          if (seen[n] || map.tiles[n] === TILE_WALL) continue;
-          seen[n] = 1;
-          stack.push(n);
-        }
-      }
-      for (const pad of map.homePads) {
-        const idx = tileIndex(Math.floor(pad.x), Math.floor(pad.y), map.size);
-        expect(seen[idx], `seed ${seed} pad ${pad.playerIndex} unreachable`).toBe(1);
-      }
-    }
+  it('treats everything outside the arena as solid', () => {
+    const tiles = decodeTiles(`${MAP.size * MAP.size}a`);
+    expect(isWallAt(tiles, -1, 5, MAP.size)).toBe(true);
+    expect(isWallAt(tiles, 5, MAP.size + 1, MAP.size)).toBe(true);
+    expect(isWallAt(tiles, 5, 5, MAP.size)).toBe(false);
   });
 });
 
@@ -213,12 +174,20 @@ describe('World', () => {
     expect(w.squadOf(1)).toHaveLength(MATCH.startingUnitCount);
   });
 
-  it('populates the arena per config', () => {
+  it('populates the arena from its map data', () => {
     const w = newWorld(1);
-    expect(w.store.count('prop')).toBe(MAP.props);
-    expect(w.store.count('node')).toBe(MAP.resourceNodes);
-    expect(w.store.count('chest')).toBe(MAP.chestSpawns);
-    expect(w.store.count('creep')).toBe(MAP.creepCamps * MAP.creepsPerCamp);
+    const authored = w.map.objects;
+    // Placements come from the arena, not a global count, so the assertion is
+    // that everything the map asked for actually got placed. A few may be
+    // dropped where the source art put an object somewhere unstandable, which
+    // is why this is a floor rather than an equality.
+    expect(w.store.count('prop')).toBeGreaterThan(authored.props.length * 0.9);
+    expect(w.store.count('node')).toBeGreaterThan(authored.nodes.length * 0.9);
+    expect(w.store.count('chest')).toBeGreaterThan(authored.chests.length * 0.9);
+    expect(w.store.count('tree')).toBeGreaterThan(authored.trees.length * 0.9);
+    expect(w.store.count('creep')).toBe(w.camps.length * MAP.creepsPerCamp);
+    expect(w.store.count('field')).toBe(MAP.fields);
+    expect(w.store.count('mine')).toBe(1);
   });
 
   it('moves the leader on input and never through walls', () => {

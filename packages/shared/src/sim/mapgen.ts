@@ -1,19 +1,19 @@
 /**
- * Seeded arena generation (brief §1.8).
+ * Arena loading (brief §1.8).
  *
- * Terrain is a flat Uint8Array of tile kinds. Generation is driven entirely by
- * the world's seed, so the host sends a seed rather than a tile dump and every
- * client rebuilds an identical map.
+ * Terrain is a flat Uint8Array of tile kinds. Layouts are authored data, not
+ * output of a generator, so the host sends a map id rather than a tile dump and
+ * every client rebuilds an identical arena from `arenaData.ts`.
  *
  * Fairness constraints, enforced rather than hoped for:
- *  - home pads are evenly spaced on the rim and always on floor
- *  - the centre is kept open so the contested zone can't be walled off
+ *  - home pads are evenly spaced on the rim and always on reachable floor
  *  - every home pad has a verified floor path to the centre
  */
 
+import { ARENA_DATA, type ArenaData } from '../config/arenaData.ts';
 import { MAP, TILE_FLOOR, TILE_GRASS, TILE_WALL } from '../config/map.ts';
-import { ARENAS, type MapId } from '../config/maps.ts';
-import { Rng } from '../math/rng.ts';
+import type { MapId } from '../config/maps.ts';
+import type { Rng } from '../math/rng.ts';
 
 export interface HomePad {
   playerIndex: number;
@@ -25,6 +25,10 @@ export interface GeneratedMap {
   size: number;
   tiles: Uint8Array;
   homePads: HomePad[];
+  /** Where the arena's gem mine sits. Marked on every source map. */
+  mine: { x: number; y: number };
+  /** Object placements read off the source art, for `populateArena`. */
+  objects: ArenaData['objects'];
 }
 
 // `size` is annotated `number` rather than inferred: MAP is `as const`, so
@@ -59,76 +63,26 @@ export function isWallAt(
 }
 
 /**
- * Blobby rock clusters rather than uniform noise — single scattered tiles read
- * as visual noise and don't create the chokepoints the brief asks for.
+ * Expand an arena's run-length encoded tile grid.
+ *
+ * Runs are `<count><kind>` with `a` floor, `b` void, `c` tall grass — about
+ * 1.5 KB per arena against 4 KB raw, which matters because all twenty-two ship
+ * to the client in the same bundle.
  */
-function scatterTerrain(tiles: Uint8Array, rng: Rng, size: number): void {
-  const cx = size / 2;
-  const cy = size / 2;
-  const keepOpen = MAP.zoneRadii[0]! * 0.55; // centre stays fightable
-
-  // Derive the cluster count from the density we actually want, rather than
-  // treating density as an opaque scale factor. Blobs average ~6 tiles and a
-  // good share of them are rejected for landing in the protected centre or on
-  // the rim, so ask for more than the arithmetic suggests and let the
-  // rejections bring it back down.
-  const interior = (size - 2) * (size - 2);
-  const avgBlobTiles = 6;
-  const clusters = Math.round(((interior * MAP.terrainDensity) / avgBlobTiles) * 1.35);
-
-  for (let c = 0; c < clusters; c++) {
-    const bx = rng.int(2, size - 2);
-    const by = rng.int(2, size - 2);
-    const blobSize = rng.int(3, 9);
-    let px = bx;
-    let py = by;
-    for (let i = 0; i < blobSize; i++) {
-      const d = Math.hypot(px - cx, py - cy);
-      const nearRim = px < 2 || py < 2 || px >= size - 2 || py >= size - 2;
-      if (d > keepOpen && !nearRim) {
-        tiles[tileIndex(px, py, size)] = TILE_WALL;
-      }
-      // Random walk keeps blobs organic and connected.
-      px = Math.max(1, Math.min(size - 2, px + rng.int(-1, 2)));
-      py = Math.max(1, Math.min(size - 2, py + rng.int(-1, 2)));
-    }
+export function decodeTiles(rle: string, size: number = MAP.size): Uint8Array {
+  const tiles = new Uint8Array(size * size);
+  const kinds: Record<string, number> = { a: TILE_FLOOR, b: TILE_WALL, c: TILE_GRASS };
+  let at = 0;
+  for (const [, count, kind] of rle.matchAll(/(\d+)([abc])/g)) {
+    tiles.fill(kinds[kind!]!, at, (at += Number(count)));
   }
-
-  // Grass in broad drifts, laid after the rock so it never overwrites a wall.
-  // Larger and softer-edged than the rock blobs: grass is a region you decide
-  // to cross, so it wants to be big enough to be worth going around.
-  const grassPatches = Math.round((interior * MAP.grassDensity) / 26);
-  for (let g = 0; g < grassPatches; g++) {
-    const gx = rng.int(3, size - 3);
-    const gy = rng.int(3, size - 3);
-    const rx = rng.int(3, 7);
-    const ry = rng.int(3, 7);
-    for (let y = gy - ry; y <= gy + ry; y++) {
-      for (let x = gx - rx; x <= gx + rx; x++) {
-        if (x < 1 || y < 1 || x >= size - 1 || y >= size - 1) continue;
-        // Elliptical falloff with a ragged edge, so patches read organic.
-        const n = ((x - gx) / rx) ** 2 + ((y - gy) / ry) ** 2;
-        if (n > 1 || (n > 0.6 && rng.chance(0.5))) continue;
-        const idx = tileIndex(x, y, size);
-        if (tiles[idx] === TILE_FLOOR) tiles[idx] = TILE_GRASS;
-      }
-    }
-  }
-
-  // Solid border so nothing can leave the arena.
-  for (let i = 0; i < size; i++) {
-    tiles[tileIndex(i, 0, size)] = TILE_WALL;
-    tiles[tileIndex(i, size - 1, size)] = TILE_WALL;
-    tiles[tileIndex(0, i, size)] = TILE_WALL;
-    tiles[tileIndex(size - 1, i, size)] = TILE_WALL;
-  }
+  if (at !== size * size) throw new Error(`mapgen: arena decoded to ${at} tiles, want ${size * size}`);
+  return tiles;
 }
 
-/** Flood fill from the centre; returns the set of reachable floor tiles. */
-function reachableFromCentre(tiles: Uint8Array, size: number): Uint8Array {
+/** Flood fill from a point; returns the set of reachable floor tiles. */
+function reachableFrom(tiles: Uint8Array, size: number, startX: number, startY: number): Uint8Array {
   const seen = new Uint8Array(size * size);
-  const startX = Math.floor(size / 2);
-  const startY = Math.floor(size / 2);
   const stack: number[] = [tileIndex(startX, startY, size)];
   seen[stack[0]!] = 1;
 
@@ -153,87 +107,75 @@ function reachableFromCentre(tiles: Uint8Array, size: number): Uint8Array {
   return seen;
 }
 
-/**
- * Carve a straight corridor between two points.
- * Used to guarantee home-pad connectivity rather than rejecting and retrying
- * the whole map, which could loop for a long time on an unlucky seed.
- */
-function carveCorridor(
-  tiles: Uint8Array,
-  size: number,
-  ax: number,
-  ay: number,
-  bx: number,
-  by: number,
-): void {
-  let x = Math.floor(ax);
-  let y = Math.floor(ay);
-  const tx = Math.floor(bx);
-  const ty = Math.floor(by);
-  let guard = 0;
-  while ((x !== tx || y !== ty) && guard++ < size * 4) {
-    for (let ox = -1; ox <= 1; ox++) {
-      for (let oy = -1; oy <= 1; oy++) {
-        const cx2 = x + ox;
-        const cy2 = y + oy;
-        if (cx2 > 0 && cy2 > 0 && cx2 < size - 1 && cy2 < size - 1) {
-          tiles[tileIndex(cx2, cy2, size)] = TILE_FLOOR;
-        }
-      }
-    }
-    if (x !== tx) x += Math.sign(tx - x);
-    else if (y !== ty) y += Math.sign(ty - y);
-  }
-}
+const ARENA_BY_ID = new Map(ARENA_DATA.map((a) => [a.id, a]));
 
 /**
- * Build one of the five fixed arenas (see config/maps.ts).
+ * Build one of the arenas (see config/maps.ts).
  *
- * The terrain seed is the arena's own, deliberately *not* the match seed — that
- * is the whole point of having fixed maps. Only pad placement varies with the
- * player count, and that is placement on known ground rather than a new layout.
+ * The layout is fixed and identical every match — only pad placement varies
+ * with the player count, and that is placement on known ground rather than a
+ * new layout.
  */
 export function buildArena(mapId: MapId, playerCount: number): GeneratedMap {
-  return generateMap(new Rng(ARENAS[mapId].seed), playerCount);
+  const arena = ARENA_BY_ID.get(mapId);
+  if (!arena) throw new Error(`mapgen: no arena data for '${mapId}'`);
+
+  const size = MAP.size;
+  const tiles = decodeTiles(arena.tiles, size);
+  const [mineX, mineY] = arena.mine;
+
+  // Seal anything the mine can't walk to. The source art draws decorative
+  // islets across the water that are unreachable by design, and leaving them
+  // walkable would let the spawner strand crates and chests on ground no
+  // player can stand on.
+  const reach = reachableFrom(tiles, size, Math.floor(mineX), Math.floor(mineY));
+  for (let i = 0; i < tiles.length; i++) {
+    if (reach[i] !== 1) tiles[i] = TILE_WALL;
+  }
+
+  return {
+    size,
+    tiles,
+    homePads: placePads(tiles, size, playerCount),
+    mine: { x: mineX, y: mineY },
+    objects: arena.objects,
+  };
 }
 
-export function generateMap(rng: Rng, playerCount: number): GeneratedMap {
-  const size = MAP.size;
-  const tiles = new Uint8Array(size * size).fill(TILE_FLOOR);
-  scatterTerrain(tiles, rng, size);
-
-  // Home pads evenly spaced around the rim (§1.8: one per player, spread evenly).
+/**
+ * Home pads evenly spaced around the rim (§1.8: one per player, spread evenly).
+ *
+ * Each pad walks inward from its rim angle until it finds standable ground,
+ * rather than stamping floor over whatever is there. On a generated map
+ * flattening a 3x3 was harmless; on an authored one it would punch a hole
+ * through a wall that the layout is shaped around — and the walk always
+ * succeeds, because the arena is a single connected region by construction.
+ */
+function placePads(tiles: Uint8Array, size: number, playerCount: number): HomePad[] {
   const cx = size / 2;
   const cy = size / 2;
   const pads: HomePad[] = [];
   const n = Math.max(1, playerCount);
+
   for (let i = 0; i < n; i++) {
     const angle = (i / n) * Math.PI * 2 - Math.PI / 2;
-    const px = Math.round(cx + Math.cos(angle) * MAP.homePadRadius);
-    const py = Math.round(cy + Math.sin(angle) * MAP.homePadRadius);
-    const clampedX = Math.max(2, Math.min(size - 3, px));
-    const clampedY = Math.max(2, Math.min(size - 3, py));
+    let px = Math.round(cx + Math.cos(angle) * MAP.homePadRadius);
+    let py = Math.round(cy + Math.sin(angle) * MAP.homePadRadius);
 
-    // A pad must never spawn inside rock, or in grass that would slow every
-    // respawn out of the gate.
-    for (let ox = -1; ox <= 1; ox++) {
-      for (let oy = -1; oy <= 1; oy++) {
-        tiles[tileIndex(clampedX + ox, clampedY + oy, size)] = TILE_FLOOR;
+    for (let step = 0; step <= MAP.homePadRadius; step++) {
+      const t = (MAP.homePadRadius - step) / MAP.homePadRadius;
+      const x = Math.round(cx + Math.cos(angle) * MAP.homePadRadius * t);
+      const y = Math.round(cy + Math.sin(angle) * MAP.homePadRadius * t);
+      // Plain floor, not grass: grass would drag every respawn out of the gate.
+      if (tiles[tileIndex(x, y, size)] === TILE_FLOOR) {
+        px = x;
+        py = y;
+        break;
       }
     }
-    pads.push({ playerIndex: i, x: clampedX + 0.5, y: clampedY + 0.5 });
+    pads.push({ playerIndex: i, x: px + 0.5, y: py + 0.5 });
   }
-
-  // Guarantee every pad can actually reach the centre.
-  let reach = reachableFromCentre(tiles, size);
-  for (const pad of pads) {
-    if (reach[tileIndex(Math.floor(pad.x), Math.floor(pad.y), size)] !== 1) {
-      carveCorridor(tiles, size, pad.x, pad.y, cx, cy);
-      reach = reachableFromCentre(tiles, size);
-    }
-  }
-
-  return { size, tiles, homePads: pads };
+  return pads;
 }
 
 /** Random floor tile that is reachable and clear of a minimum radius. */

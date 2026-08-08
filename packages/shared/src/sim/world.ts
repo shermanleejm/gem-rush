@@ -48,6 +48,7 @@ import {
   CREEP_DAMAGE,
   CREEP_INTERVAL,
   CREEP_RANGE,
+  MINE,
   applyBattleModTerrain,
   chestPool,
   populateArena,
@@ -59,6 +60,7 @@ import {
   spawnFarmable,
   spawnGem,
   spawnLeader,
+  spawnMine,
   spawnNode,
   spawnUnit,
   type CreepCamp,
@@ -150,6 +152,11 @@ export type WorldEvent =
   | { t: 'rebuilt'; player: PlayerId }
   | { t: 'draftOffer'; player: PlayerId; options: UnitType[] }
   | { t: 'draftPick'; player: PlayerId; unit: UnitType }
+  /** The centre mine coughed up its periodic gems. */
+  | { t: 'mineDrop'; x: number; y: number; gems: number }
+  /** The mine is about to blow; `seconds` is how long the client should count. */
+  | { t: 'mineWarning'; x: number; y: number; seconds: number }
+  | { t: 'mineBlast'; x: number; y: number; gems: number }
   | { t: 'phase'; phase: Phase };
 
 /** How close a leader must be before loose pickups start flying to it. */
@@ -190,6 +197,13 @@ export class World {
   camps: CreepCamp[] = [];
   chestSpots: { x: number; y: number }[] = [];
 
+  /** The central gem mine. Present on every arena. */
+  readonly mine: Entity;
+  private mineCooldown = MINE.interval;
+  /** Set once the mine has blown, so it only ever does so once. */
+  private mineBlown = false;
+  private mineWarned = false;
+
   /** Events produced by the current tick; consumed and cleared by the host. */
   events: WorldEvent[] = [];
 
@@ -213,15 +227,15 @@ export class World {
     this.rng = new Rng(seed);
     this.mode = GAME_MODES[modeId];
     this.battleMod = BATTLE_MODS[battleModId];
-    // One of five fixed arenas. Drawn from the match seed when the caller does
-    // not name one, so a replay of the same seed lands on the same ground.
+    // Drawn from the match seed when the caller does not name one, so a replay
+    // of the same seed lands on the same ground.
     this.mapId = mapId ?? MAP_IDS[this.rng.int(0, MAP_IDS.length)]!;
     this.map = buildArena(this.mapId, playerCount);
-    const populated = populateArena(this.store, this.map.tiles, this.rng);
+    const populated = populateArena(this.store, this.map.tiles, this.rng, this.map.objects);
     this.camps = populated.camps;
     this.chestSpots = populated.chestSpots;
     applyBattleModTerrain(this.store, this.map.tiles, this.rng, this.battleMod);
-
+    this.mine = spawnMine(this.store, this.map.mine.x, this.map.mine.y);
   }
 
   // ── players ───────────────────────────────────────────────────────────────
@@ -451,6 +465,8 @@ export class World {
     this.resolveSquadCollisions();
     // 9. Respawn timers, node respawns, creep camp respawns
     this.resolveRespawns(dt);
+    // 9b. The centre mine coughs up gems, and eventually blows.
+    this.updateMine(dt);
     // 10. Phase/timer update
     this.updatePhase(dt);
 
@@ -1419,6 +1435,52 @@ export class World {
           camp.strength,
         );
       }
+    }
+  }
+
+  /**
+   * The centre mine: a steady trickle all match, then one detonation at the end.
+   *
+   * Gems land on the floor as ordinary pickups rather than being credited to
+   * whoever is nearest, so the mine pays *presence*, not proximity at the
+   * instant it fires — you have to still be there to collect, which is what
+   * makes standing on it a commitment rather than a drive-by.
+   */
+  private updateMine(dt: number): void {
+    const remaining = this.timeRemaining;
+
+    if (!this.mineWarned && remaining <= MINE.warningSeconds) {
+      this.mineWarned = true;
+      this.events.push({ t: 'mineWarning', x: this.mine.x, y: this.mine.y, seconds: remaining - MINE.blastSeconds });
+    }
+
+    if (!this.mineBlown && remaining <= MINE.blastSeconds) {
+      this.mineBlown = true;
+      this.scatterMineGems(MINE.blastGems, MINE.blastGemValue, MINE.blastScatterRadius);
+      this.events.push({ t: 'mineBlast', x: this.mine.x, y: this.mine.y, gems: MINE.blastGems });
+      return;
+    }
+    if (this.mineBlown) return;
+
+    this.mineCooldown -= dt;
+    if (this.mineCooldown > 0) return;
+    this.mineCooldown += MINE.interval;
+    this.scatterMineGems(MINE.gemsPerDrop, MINE.gemValue, MINE.scatterRadius);
+    this.events.push({ t: 'mineDrop', x: this.mine.x, y: this.mine.y, gems: MINE.gemsPerDrop });
+  }
+
+  private scatterMineGems(count: number, value: number, radius: number): void {
+    const scaled = Math.max(1, Math.round(value * this.mode.economyScale));
+    for (let i = 0; i < count; i++) {
+      // Spread over the disc rather than a ring, so a big scatter reads as a
+      // pile spilling outward instead of a suspiciously neat circle.
+      const angle = this.rng.float() * Math.PI * 2;
+      const dist = Math.sqrt(this.rng.float()) * radius;
+      const x = this.mine.x + Math.cos(angle) * dist;
+      const y = this.mine.y + Math.sin(angle) * dist;
+      // Gems that land in rock are unreachable; drop those on the mine instead.
+      const clear = !isWallAt(this.map.tiles, x, y, this.map.size);
+      spawnGem(this.store, clear ? x : this.mine.x, clear ? y : this.mine.y, scaled);
     }
   }
 

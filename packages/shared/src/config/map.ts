@@ -68,18 +68,32 @@ export function zoneAt(x: number, y: number): number {
   return MAP.zoneRadii.length;
 }
 
-/** Richer toward the middle — this is the pull that makes the centre contested. */
+/**
+ * Richer toward the middle — part of the pull that makes the centre contested.
+ *
+ * Deliberately gentle, because it is no longer doing the job alone. It was
+ * tuned against procedurally scattered arenas, where loot was spread evenly
+ * enough that a multiplier was the only thing making the middle worth the
+ * risk. The authored arenas already concentrate their crates, camps and chests
+ * inward — the rim carries about a quarter of the object density of the
+ * interior — so the old 2.4x centre bonus was counting the same incentive
+ * twice, and the harness measured rim play collapsing from a viable 13% win
+ * rate to 4% while the centre-holder took a third of all matches.
+ *
+ * Flattening it recovered some of that, but not all: `sim:bench` still reports
+ * the never-buy opening below its 5% floor. The remaining cause is survival
+ * rather than income — the real maps are full of water, so squads meet far
+ * more often and a one-unit hoarder gets busted before it can compound — and
+ * fixing it properly means revisiting the bust rules, not this multiplier.
+ */
 export function zoneYieldMultiplier(zone: number): number {
   switch (zone) {
     case 0:
-      // The middle pays roughly double the rim. Pushing it higher was tried and
-      // did not help: it lifts everyone who visits the centre, including the
-      // rim-farmer who dips in once, so the *relative* incentive barely moves.
-      return 2.4;
+      return 1.35;
     case 1:
-      return 1.7;
+      return 1.2;
     case 2:
-      return 1.25;
+      return 1.1;
     default:
       return 1.0;
   }

@@ -24,7 +24,7 @@ const idle = (ids: number[]): Map<number, InputCommand> =>
 
 /** A world with one player, already past the draft. */
 function solo(mod: BattleModId, seed = 900): World {
-  const w = new World(seed, 1, 'gemHunt', 'quarry', mod);
+  const w = new World(seed, 1, 'gemHunt', 'bustervalley', mod);
   w.addPlayer(1, 'P');
   w.start();
   return w;
@@ -231,7 +231,7 @@ describe('battle mods', () => {
 
   it('runs a full match under every mod without falling over', () => {
     for (const id of BATTLE_MOD_IDS) {
-      const w = new World(4242, 4, 'gemHunt', 'quarry', id);
+      const w = new World(4242, 4, 'gemHunt', 'bustervalley', id);
       for (let i = 0; i < 4; i++) w.addPlayer(i + 1, `P${i + 1}`);
       w.start();
       const ticks = Math.ceil(MATCH.matchSeconds / TICK_DT) + 10;

@@ -1,43 +1,60 @@
 /**
- * The five arenas.
+ * The arenas.
  *
- * Every match used to generate a fresh layout from the match seed, so no two
- * games were ever played on the same ground and there was nothing to learn.
- * Five fixed arenas give players map knowledge — where the chokepoints are,
- * which camp is worth contesting, where a chest usually sits — which is most of
- * what makes a session-based game deepen with play.
+ * These are the twenty-two Squad Busters Gem Hunt maps, transcribed tile for
+ * tile from the published map art rather than generated. They used to be five
+ * terrain seeds: the generator was tuned until its output scored well on
+ * density and quadrant balance, which produced arenas that were *fair* but not
+ * *places* — no map had a shape you could learn, because none of them had been
+ * designed, only sampled.
  *
- * They are stored as **seeds, not tile dumps**. The generator is already
- * written and tested, a 64x64 arena regenerates in well under a millisecond,
- * and this keeps the repo free of binary blobs. The catch is that the layouts
- * are only stable as long as the generator is: edit `scatterTerrain` and all
- * five silently become different maps. `maps.test.ts` pins a checksum of each
- * so that change fails loudly and has to be re-blessed on purpose.
- *
- * The seeds are not arbitrary. 4000 candidates were scored on interior wall
- * density, per-quadrant balance (so no spawn faces a walled-off run to the
- * centre while another has open ground), spread of path distance from each home
- * pad to the middle, and isolated-floor fraction. These five are the best
- * scoring set that are also mutually distinct — every pair differs in over 91%
- * of its rock, so they read as different places rather than reshuffles.
+ * The layouts live in `arenaData.ts`, written by `tools/import-maps.py`. That
+ * file is generated, so the id list below is the hand-kept half of the pair;
+ * `maps.test.ts` fails if the two ever drift.
  */
 
-export const MAP_IDS = ['quarry', 'crossroads', 'basin', 'thicket', 'foundry'] as const;
+import { ARENA_DATA, type ArenaPalette } from './arenaData.ts';
+
+export const MAP_IDS = [
+  'arcadealley',
+  'boilerroom',
+  'bustervalley',
+  'dustybadlands',
+  'emeraldgrove',
+  'frozenmarsh',
+  'greenhillzone',
+  'hauntedgarden',
+  'invasionisland',
+  'lavaspa',
+  'midnightmortuary',
+  'pekkasplayground',
+  'provinggrounds',
+  'rowdyrink',
+  'royalrumbleyard',
+  'scavengersshore',
+  'steelgauntlet',
+  'thesandpit',
+  'troublesomegulch',
+  'twistingtrails',
+  'waterwayblitz',
+  'yetipeak',
+] as const;
 export type MapId = (typeof MAP_IDS)[number];
 
 export interface ArenaDef {
   id: MapId;
   name: string;
-  /** Seed fed to the terrain generator. Changing this changes the arena. */
-  seed: number;
+  /** Which Squad Busters world it comes from. */
+  world: string;
+  /** Colours lifted from the arena's own art, so each world looks like itself. */
+  palette: ArenaPalette;
 }
 
-export const ARENAS: Record<MapId, ArenaDef> = {
-  quarry: { id: 'quarry', name: 'Quarry', seed: 1910 },
-  crossroads: { id: 'crossroads', name: 'Crossroads', seed: 3921 },
-  basin: { id: 'basin', name: 'Basin', seed: 3741 },
-  thicket: { id: 'thicket', name: 'Thicket', seed: 2488 },
-  foundry: { id: 'foundry', name: 'Foundry', seed: 3501 },
-};
+export const ARENAS: Record<MapId, ArenaDef> = Object.fromEntries(
+  ARENA_DATA.map((a) => [
+    a.id,
+    { id: a.id as MapId, name: a.name, world: a.world, palette: a.palette },
+  ]),
+) as Record<MapId, ArenaDef>;
 
-export const DEFAULT_MAP: MapId = 'quarry';
+export const DEFAULT_MAP: MapId = 'bustervalley';

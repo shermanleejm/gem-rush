@@ -10,6 +10,7 @@ import {
   GAME_MODES,
   INPUT_RATE,
   MATCH,
+  MINE,
   type LobbyPlayer,
   type UnitType,
   type WorldEvent,
@@ -189,7 +190,7 @@ let pendingMap: { size: number; tiles: Uint8Array } | null = null;
 
 function applyPendingMap(): void {
   if (!pendingMap || !scene.ready) return;
-  scene.buildTerrain(pendingMap.size, pendingMap.tiles);
+  scene.buildTerrain(pendingMap.size, pendingMap.tiles, conn.mapId);
   minimap.setTerrain(pendingMap.size, pendingMap.tiles);
   mapSize = pendingMap.size;
   pendingMap = null;
@@ -273,6 +274,26 @@ function handleEvents(events: WorldEvent[]): void {
         scene.spawnBurst(ev.x, ev.y, 0xffa552, 18);
         audio.play('phase');
         break;
+
+      case 'mineDrop':
+        scene.spawnBurst(ev.x, ev.y, 0x6ad2ff, 10);
+        break;
+      case 'mineWarning':
+        // The countdown is the whole point of the warning: everyone needs the
+        // same clock to decide whether they can make it to the middle in time.
+        mineCountdown = ev.seconds;
+        banner.flash('The mine is going critical', 'Be standing on it when it blows.');
+        audio.play('phase');
+        break;
+      case 'mineBlast':
+        // Big enough to read from anywhere on the map — if you were too far to
+        // contest it, you should at least see what you missed.
+        scene.spawnBurst(ev.x, ev.y, 0xffe27a, 46);
+        scene.spawnBurst(ev.x, ev.y, 0xff7a4d, 30);
+        mineCountdown = 0;
+        banner.flash('The mine blew', `${ev.gems} gems on the floor.`);
+        audio.play('fusion');
+        break;
       case 'squadFight':
         scene.spawnBurst(ev.x, ev.y, 0xff6b6b, 16);
         audio.play(ev.loser === conn.playerId ? 'wipe' : 'death');
@@ -326,6 +347,8 @@ function handleEvents(events: WorldEvent[]): void {
 let chestChoice: number | undefined;
 let draft: ReturnType<typeof showDraft> | null = null;
 let closeModeCard: (() => void) | null = null;
+/** Seconds until the mine blows. Counted down locally once the host warns. */
+let mineCountdown = 0;
 const minimapDots: { x: number; y: number; kind: string; team: number; mine: boolean }[] = [];
 let lastFrame = performance.now();
 let inputAcc = 0;
@@ -399,6 +422,12 @@ function frame(now: number): void {
       hud.setSquad(squadSize, conn.config.squadCap);
       hud.setMode(mode.label);
       hud.setDashCooldown(me?.dc ?? 0);
+
+      // The warning arrives once and the clock runs locally from there, so the
+      // countdown ticks smoothly instead of stepping with the snapshot rate.
+      if (mineCountdown > 0) mineCountdown = Math.max(0, mineCountdown - dt);
+      hud.setMineCountdown(mineCountdown > 0 ? mineCountdown : null);
+      scene.mineCharge = mineCountdown > 0 ? 1 - mineCountdown / MINE.warningSeconds : 0;
 
       // Gem count rides above your own character.
       if (gemTag) {

@@ -6,9 +6,10 @@
  * rim from out-earning a fight for the middle (§4, known failure mode).
  */
 
+import type { ArenaObjects } from '../config/arenaData.ts';
 import { COIN_YIELD, GEM_YIELD, MATCH } from '../config/match.ts';
 import type { BattleMod } from '../config/battleMods.ts';
-import { MAP, zoneAt } from '../config/map.ts';
+import { MAP, TILE_WALL, zoneAt } from '../config/map.ts';
 import {
   RARITIES,
   UNIT_DEFS,
@@ -20,7 +21,7 @@ import {
 } from '../config/units.ts';
 import type { Rng } from '../math/rng.ts';
 import { TEAM_NEUTRAL, type Entity, type EntityStore } from './entities.ts';
-import { findOpenTile, isWallAt } from './mapgen.ts';
+import { findOpenTile, isWallAt, tileIndex } from './mapgen.ts';
 
 /**
  * Crates are deliberately flimsy.
@@ -166,6 +167,53 @@ export function spawnCreep(
   return e;
 }
 
+/**
+ * The gem mine that sits at the centre of every arena.
+ *
+ * It is the one landmark the source maps all share, and it does the job the
+ * zone yield multiplier was doing alone: give the middle of the map a reason to
+ * be worth standing in. A multiplier is invisible — you have to be told it
+ * exists — whereas a mine that visibly coughs gems onto the floor every few
+ * seconds teaches itself, and the pile that builds up while nobody is there is
+ * an open invitation to go and contest it.
+ *
+ * The blow at the end is the second half. Matches were decided well before the
+ * whistle once a leader was far enough ahead, so the closing minute had nothing
+ * in it; a payout worth several minutes of farming, at a spot everyone can
+ * reach and on a clock everyone can see, means the last thirty seconds are the
+ * ones people fight over.
+ */
+export const MINE = {
+  radius: 2.2,
+  /** Seconds between ordinary drops, and how many gems each drop scatters. */
+  interval: 10,
+  gemsPerDrop: 3,
+  gemValue: 3,
+  /** Gems flung by the detonation, and what each is worth. */
+  blastGems: 24,
+  blastGemValue: 5,
+  /** How far gems are thrown. The blast reaches further, so it needs contesting. */
+  scatterRadius: 2.6,
+  blastScatterRadius: 7,
+  /** The warning window before the blast, in seconds before the match ends. */
+  warningSeconds: 20,
+  /** When the blast lands, in seconds before the match ends. */
+  blastSeconds: 8,
+} as const;
+
+export function spawnMine(store: EntityStore, x: number, y: number): Entity {
+  const e = store.spawn('mine');
+  e.x = x;
+  e.y = y;
+  e.team = TEAM_NEUTRAL;
+  e.radius = MINE.radius;
+  // Indestructible: the mine is scenery on a timer, not something to be farmed
+  // down early by whoever gets there first.
+  e.maxHp = 1;
+  e.hp = 1;
+  return e;
+}
+
 export const TREE_HP = 90;
 export const FIELD_HP = 60;
 
@@ -293,30 +341,71 @@ export interface CreepCamp {
   strength: number;
 }
 
-/** Fill an empty world with props, nodes, camps and chest pads. */
+/**
+ * An authored placement, snapped to standable ground.
+ *
+ * The source art places objects on tiles that this sim then seals off — a crate
+ * on a decorative islet, or one the arena's unreachable-pocket pass turned to
+ * void. Rather than dropping those (which would quietly thin out whole corners
+ * of a map), each is nudged to the nearest open tile within a couple of tiles.
+ */
+function snap(
+  tiles: Uint8Array,
+  size: number,
+  x: number,
+  y: number,
+  footprint: number,
+): { x: number; y: number } | null {
+  for (let r = 0; r <= 2; r++) {
+    for (let oy = -r; oy <= r; oy++) {
+      for (let ox = -r; ox <= r; ox++) {
+        if (Math.max(Math.abs(ox), Math.abs(oy)) !== r) continue;
+        const px = x + ox;
+        const py = y + oy;
+        if (px < 1 || py < 1 || px >= size - 1 || py >= size - 1) continue;
+        if (tiles[tileIndex(px, py, size)] === TILE_WALL) continue;
+        if (!hasClearance(tiles, px + 0.5, py + 0.5, footprint, size)) continue;
+        return { x: px + 0.5, y: py + 0.5 };
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Fill the world with the arena's props, nodes, camps and chest pads.
+ *
+ * Placements come from the map data — these arenas are transcriptions, and half
+ * of what makes one recognisable is *where the crates are*, not just where the
+ * walls are. Fields are the one exception: the source art has no distinct
+ * farmable-crop object, so they are still scattered, seeded off the match rng.
+ */
 export function populateArena(
   store: EntityStore,
   tiles: Uint8Array,
   rng: Rng,
+  objects: ArenaObjects,
 ): { camps: CreepCamp[]; chestSpots: { x: number; y: number }[] } {
   const size = MAP.size;
 
-  for (let i = 0; i < MAP.props; i++) {
-    const spot = centreBiasedSpot(tiles, rng, size, 0.9, store, 0.6);
-    spawnProp(store, spot.x, spot.y);
+  for (const [x, y] of objects.props) {
+    const spot = snap(tiles, size, x, y, 0.6);
+    if (spot) spawnProp(store, spot.x, spot.y);
   }
 
-  for (let i = 0; i < MAP.resourceNodes; i++) {
-    const spot = centreBiasedSpot(tiles, rng, size, 1.4, store, 0.85);
-    spawnNode(store, spot.x, spot.y);
+  for (const [x, y] of objects.nodes) {
+    const spot = snap(tiles, size, x, y, 0.85);
+    if (spot) spawnNode(store, spot.x, spot.y);
   }
 
   const camps: CreepCamp[] = [];
-  for (let c = 0; c < MAP.creepCamps; c++) {
-    const spot = centreBiasedSpot(tiles, rng, size, 3.0, store, 1.4);
+  for (const [x, y] of objects.camps) {
+    const spot = snap(tiles, size, x, y, 1.4);
+    if (!spot) continue;
     const strength = creepStrengthAt(spot.x, spot.y);
+    const id = camps.length;
     camps.push({
-      id: c,
+      id,
       x: spot.x,
       y: spot.y,
       respawnIn: 0,
@@ -326,15 +415,13 @@ export function populateArena(
     });
     for (let k = 0; k < MAP.creepsPerCamp; k++) {
       const angle = (k / MAP.creepsPerCamp) * Math.PI * 2;
-      const cx = spot.x + Math.cos(angle) * 0.9;
-      const cy = spot.y + Math.sin(angle) * 0.9;
-      spawnCreep(store, cx, cy, c, strength);
+      spawnCreep(store, spot.x + Math.cos(angle) * 0.9, spot.y + Math.sin(angle) * 0.9, id, strength);
     }
   }
 
-  for (let i = 0; i < MAP.trees; i++) {
-    const spot = centreBiasedSpot(tiles, rng, size, 1.2, store, 1.1);
-    spawnFarmable(store, 'tree', spot.x, spot.y);
+  for (const [x, y] of objects.trees) {
+    const spot = snap(tiles, size, x, y, 1.1);
+    if (spot) spawnFarmable(store, 'tree', spot.x, spot.y);
   }
   for (let i = 0; i < MAP.fields; i++) {
     const spot = centreBiasedSpot(tiles, rng, size, 1.2, store, 0.8);
@@ -342,8 +429,9 @@ export function populateArena(
   }
 
   const chestSpots: { x: number; y: number }[] = [];
-  for (let i = 0; i < MAP.chestSpawns; i++) {
-    const spot = centreBiasedSpot(tiles, rng, size, 2.0, store, 0.85);
+  for (const [x, y] of objects.chests) {
+    const spot = snap(tiles, size, x, y, 0.85);
+    if (!spot) continue;
     chestSpots.push(spot);
     spawnChest(store, spot.x, spot.y, 'common');
   }

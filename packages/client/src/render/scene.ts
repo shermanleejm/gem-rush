@@ -9,7 +9,16 @@
 
 import { Application, Container, Graphics, Sprite, Text, TextStyle, type Renderer } from 'pixi.js';
 
-import { MAP, TILE_GRASS, TILE_WALL, UNIT_DEFS, type UnitType } from '@gem-rush/shared';
+import {
+  ARENAS,
+  DEFAULT_MAP,
+  MAP,
+  TILE_GRASS,
+  TILE_WALL,
+  UNIT_DEFS,
+  type MapId,
+  type UnitType,
+} from '@gem-rush/shared';
 
 import type { ViewEntity } from '../net/connection.ts';
 import { buildSpriteAtlas, type SpriteAtlas } from './sprites3d.ts';
@@ -35,6 +44,36 @@ const POPUP_STYLE = new TextStyle({
 
 /** How long a dropped pickup spends bursting out before it settles. */
 const POP_SECONDS = 0.42;
+
+/** Blend two packed RGB colours. */
+function mix(a: number, b: number, t: number): number {
+  const ch = (shift: number): number =>
+    Math.round((((a >> shift) & 0xff) * (1 - t) + ((b >> shift) & 0xff) * t)) << shift;
+  return ch(16) | ch(8) | ch(0);
+}
+
+/** Perceived brightness, 0..1. */
+function luma(c: number): number {
+  return (0.299 * ((c >> 16) & 0xff) + 0.587 * ((c >> 8) & 0xff) + 0.114 * (c & 0xff)) / 255;
+}
+
+/**
+ * Push the void away from the floor until the two are clearly different.
+ *
+ * Palettes are lifted from each arena's own art, and one of them — Arcade
+ * Alley — draws its ground and its pit in two dark navies a few percent apart.
+ * Faithful, and unplayable: you could not tell at a glance which squares you
+ * would walk into. Every other world already clears the bar, so this only bites
+ * where the source itself is ambiguous.
+ */
+function separateVoid(voidColor: number, floor: number): number {
+  const gap = 0.22;
+  const diff = luma(floor) - luma(voidColor);
+  if (Math.abs(diff) >= gap) return voidColor;
+  // Move it away from the floor, in whichever direction it already leant.
+  const toward = diff >= 0 ? 0x000000 : 0xffffff;
+  return mix(voidColor, toward, (gap - Math.abs(diff)) / gap);
+}
 
 const TEAM_COLORS = [
   0x4da3ff, 0xff7a59, 0x56d9a3, 0xffc857, 0xb98bff, 0xff6bb5, 0x5ee0e0, 0xa3d94d,
@@ -81,6 +120,8 @@ export class Scene {
   private cameraPlaced = false;
   /** Seconds since the scene started; drives idle animation. */
   private time = 0;
+  /** 0 while the mine is calm, ramping to 1 as its detonation approaches. */
+  mineCharge = 0;
   private zoom = 1;
   private targetZoom = 1;
 
@@ -129,9 +170,16 @@ export class Scene {
    * 64x64 tiles as individual sprites would be 4096 nodes that never change;
    * drawing once into a texture makes terrain effectively free.
    */
-  buildTerrain(size: number, tiles: Uint8Array): void {
+  buildTerrain(size: number, tiles: Uint8Array, mapId: MapId = DEFAULT_MAP): void {
     this.cameraPlaced = false; // new map, re-snap to wherever we spawn
     this.terrainLayer.removeChildren();
+
+    // Each arena paints in its own world's colours. A single green-field
+    // palette made every map read as the same place with the walls moved,
+    // which is most of what a themed arena is *for*.
+    const palette = ARENAS[mapId].palette;
+    const voidColor = separateVoid(palette.void, palette.floor);
+    this.app.renderer.background.color = voidColor;
 
     // Backdrop beyond the arena, drawn as vector geometry rather than baked
     // into the tile texture. The camera no longer clamps to the map, so the
@@ -143,44 +191,47 @@ export class Scene {
     const pad = 200;
     const backdrop = new Graphics()
       .rect(-pad, -pad, size + pad * 2, size + pad * 2)
-      // Water, not void. Every home pad is on the rim, so this is on screen at
-      // every spawn — a black surround made the whole game feel like it was
-      // happening at night.
-      .fill(0x2f6b8f);
+      // Whatever this world drowns you in, not black. Every home pad is on the
+      // rim, so this is on screen at every spawn — a dark surround made the
+      // whole game feel like it was happening at night.
+      .fill(voidColor);
     this.terrainLayer.addChild(backdrop);
 
     const g = new Graphics();
 
-    // A bright mown-field checker, not a dark void. The arena used to be almost
-    // black, which made every tinted sprite on top of it read as gloomy no
-    // matter how the sprites themselves were lit — the floor sets the mood for
-    // everything standing on it. Two close greens in a 2-tile check give the
-    // ground readable scale as you move without turning into a busy pattern.
-    g.rect(0, 0, size, size).fill(0x6bbf59);
+    // Two close floor tones in a 2-tile check, so the ground has readable scale
+    // as you move without turning into a busy pattern.
+    g.rect(0, 0, size, size).fill(palette.floor);
     for (let y = 0; y < size; y++) {
       for (let x = 0; x < size; x++) {
-        if (((x >> 1) + (y >> 1)) % 2 === 0) g.rect(x, y, 1, 1).fill(0x63b552);
+        if (((x >> 1) + (y >> 1)) % 2 === 0) g.rect(x, y, 1, 1).fill(palette.floorAlt);
       }
     }
 
     // Zone rings, so the contested centre reads at a glance. Warm and subtle:
     // they should say "this is the middle", not repaint the field.
+    // Scaled against the floor's own brightness: a flat 5-10% white is barely
+    // there on a bright field but a glaring pale disc on a dark one, and the
+    // dark worlds were reading as a lighting fault rather than a map feature.
+    const ringAlpha = 0.03 + luma(palette.floor) * 0.06;
     const c = size / 2;
-    g.circle(c, c, MAP.zoneRadii[2]!).fill({ color: 0xffffff, alpha: 0.05 });
-    g.circle(c, c, MAP.zoneRadii[1]!).fill({ color: 0xffe27a, alpha: 0.07 });
-    g.circle(c, c, MAP.zoneRadii[0]!).fill({ color: 0xffe27a, alpha: 0.1 });
+    g.circle(c, c, MAP.zoneRadii[2]!).fill({ color: 0xffffff, alpha: ringAlpha * 0.6 });
+    g.circle(c, c, MAP.zoneRadii[1]!).fill({ color: 0xffe27a, alpha: ringAlpha * 0.8 });
+    g.circle(c, c, MAP.zoneRadii[0]!).fill({ color: 0xffe27a, alpha: ringAlpha });
+
+    // Tall grass is drawn as a darker shade of that arena's own floor rather
+    // than a fixed green: the source art marks it with overlaid sprites and has
+    // no distinct ground colour for it, and a green patch on an ice map would
+    // read as a different surface rather than a slower one.
+    const grassColor = mix(palette.floor, 0x000000, 0.32);
 
     for (let y = 0; y < size; y++) {
       for (let x = 0; x < size; x++) {
         const t = tiles[y * size + x];
         if (t === TILE_WALL) {
-          // Rock, with a lighter top edge so the wall reads as having height.
-          g.rect(x, y, 1, 1).fill(0x8d7c68);
-          g.rect(x, y, 1, 0.28).fill(0xa89684);
+          g.rect(x, y, 1, 1).fill(voidColor);
         } else if (t === TILE_GRASS) {
-          // Tall grass: darker and cooler than the mown field, so the slow
-          // zones are obvious before you walk into one.
-          g.rect(x, y, 1, 1).fill(0x3f8f46);
+          g.rect(x, y, 1, 1).fill(grassColor);
         }
       }
     }
@@ -200,7 +251,7 @@ export class Scene {
     // the backdrop rather than fading into it.
     const rim = new Graphics()
       .rect(0, 0, size, size)
-      .stroke({ color: 0xe0d5a8, width: 0.6, alignment: 1 });
+      .stroke({ color: mix(palette.floor, 0xffffff, 0.6), width: 0.6, alignment: 1 });
     this.terrainLayer.addChild(rim);
   }
 
@@ -362,6 +413,24 @@ export class Scene {
         s.tint = 0x37b0c9;
         s.width = s.height = 1.1;
         break;
+      case 'mine': {
+        // The centre landmark, and the only thing on the field drawn at this
+        // scale — it has to read as "the place" from across the arena. Its glow
+        // winds up as the match runs down, so the countdown is legible from the
+        // mine itself and not only from the banner.
+        s.texture = this.atlas.mine;
+        const heat = this.mineCharge;
+        // Ramped through amber rather than straight from cyan to red: those two
+        // are near-opposites, so a single blend passes through grey and the
+        // mine looked bleached at exactly the moment it should look dangerous.
+        s.tint =
+          heat < 0.5
+            ? mix(0x6ad2ff, 0xffc04a, heat * 2)
+            : mix(0xffc04a, 0xff4530, (heat - 0.5) * 2);
+        const throb = 1 + Math.sin(this.time * (3 + heat * 14)) * (0.04 + heat * 0.09);
+        s.width = s.height = 4.4 * throb;
+        break;
+      }
       case 'chest':
         s.texture = this.atlas.chest;
         s.tint = 0xffc857;

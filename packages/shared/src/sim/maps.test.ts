@@ -1,16 +1,17 @@
 /**
- * The five fixed arenas.
+ * The arenas.
  *
  * The point of fixed maps is that players learn them, which only holds if they
- * genuinely never change. They are stored as generator seeds rather than tile
- * dumps, so an innocent-looking edit to `scatterTerrain` would silently turn
- * all five into different places. The checksums below exist to make that fail
- * loudly: if one trips, either revert the generator change or re-bless the
- * numbers deliberately, knowing every arena just changed.
+ * genuinely never change. They are transcribed from the source art by
+ * `tools/import-maps.py`, so a re-import with a changed classifier would
+ * silently turn every arena into a different place. The checksums below exist
+ * to make that fail loudly: if one trips, either revert the importer change or
+ * re-bless the numbers deliberately, knowing that arena just changed.
  */
 
 import { describe, expect, it } from 'vitest';
 
+import { ARENA_DATA } from '../config/arenaData.ts';
 import { MAP, TILE_FLOOR, TILE_GRASS, TILE_WALL } from '../config/map.ts';
 import { ARENAS, MAP_IDS, type MapId } from '../config/maps.ts';
 import { buildArena, tileIndex } from './mapgen.ts';
@@ -25,16 +26,33 @@ function checksum(tiles: Uint8Array): number {
   return h >>> 0;
 }
 
-/** Pinned on the curated seeds. Regenerate only on a deliberate change. */
+/** Pinned on the imported layouts. Regenerate only on a deliberate change. */
 const EXPECTED: Record<MapId, number> = {
-  quarry: 959906205,
-  crossroads: 1066321964,
-  basin: 2132829555,
-  thicket: 266986803,
-  foundry: 847522436,
+  arcadealley: 2096023570,
+  boilerroom: 3183340960,
+  bustervalley: 2088903292,
+  dustybadlands: 4085497409,
+  emeraldgrove: 3074663737,
+  frozenmarsh: 2687461204,
+  greenhillzone: 837392608,
+  hauntedgarden: 2294850868,
+  invasionisland: 2452084525,
+  lavaspa: 1148660364,
+  midnightmortuary: 86817805,
+  pekkasplayground: 1700475989,
+  provinggrounds: 1747885060,
+  rowdyrink: 2197590265,
+  royalrumbleyard: 2702522557,
+  scavengersshore: 439522376,
+  steelgauntlet: 1167883939,
+  thesandpit: 3956204445,
+  troublesomegulch: 3654681088,
+  twistingtrails: 1628009117,
+  waterwayblitz: 3269086137,
+  yetipeak: 1323576148,
 };
 
-describe('the five arenas', () => {
+describe('the arenas', () => {
   it('are stable for a given player count', () => {
     for (const id of MAP_IDS) {
       const a = buildArena(id, 8);
@@ -43,7 +61,7 @@ describe('the five arenas', () => {
     }
   });
 
-  it('do not change when the generator does', () => {
+  it('do not change when the importer does', () => {
     const actual: Record<string, number> = {};
     for (const id of MAP_IDS) actual[id] = checksum(buildArena(id, 8).tiles);
 
@@ -61,20 +79,34 @@ describe('the five arenas', () => {
     }
   });
 
+  /**
+   * Pairs that share a layout in the source, re-skinned into another world.
+   *
+   * Not an import bug — Supercell built three of these maps twice. They stay in
+   * as separate arenas because they *play* the same but *read* differently, and
+   * cutting one would mean shipping fewer maps than the game has.
+   */
+  const RESKINS = [
+    ['greenhillzone', 'scavengersshore'],
+    ['hauntedgarden', 'twistingtrails'],
+    ['dustybadlands', 'midnightmortuary'],
+  ];
+
   it('are all distinct places, not reshuffles of one', () => {
-    // Jaccard distance over interior walls. Measured on walls because only ~12%
-    // of the arena is rock, and measured on the interior because the border is
-    // structural and identical in every map — include either and two unrelated
-    // layouts come out looking 70% the same.
-    const walls = (id: MapId): Uint8Array => buildArena(id, 8).tiles;
+    // Jaccard distance over interior void. Measured on the interior because the
+    // outer band is structural and similar in every map — include it and two
+    // unrelated layouts come out looking most of the way identical.
+    const voids = (id: MapId): Uint8Array => buildArena(id, 8).tiles;
     for (let i = 0; i < MAP_IDS.length; i++) {
       for (let j = i + 1; j < MAP_IDS.length; j++) {
-        const a = walls(MAP_IDS[i]!);
-        const b = walls(MAP_IDS[j]!);
+        const [idA, idB] = [MAP_IDS[i]!, MAP_IDS[j]!];
+        if (RESKINS.some(([p, q]) => (p === idA && q === idB) || (p === idB && q === idA))) continue;
+        const a = voids(idA);
+        const b = voids(idB);
         let both = 0;
         let either = 0;
-        for (let y = 1; y < MAP.size - 1; y++) {
-          for (let x = 1; x < MAP.size - 1; x++) {
+        for (let y = 6; y < MAP.size - 6; y++) {
+          for (let x = 6; x < MAP.size - 6; x++) {
             const k = tileIndex(x, y, MAP.size);
             const wa = a[k] === TILE_WALL;
             const wb = b[k] === TILE_WALL;
@@ -82,18 +114,17 @@ describe('the five arenas', () => {
             if (wa || wb) either++;
           }
         }
-        const distance = 1 - both / either;
-        expect(distance, `${MAP_IDS[i]} and ${MAP_IDS[j]} are too alike`).toBeGreaterThan(0.85);
+        expect(1 - both / either, `${idA} and ${idB} are too alike`).toBeGreaterThan(0.5);
       }
     }
   });
 
   it('are fair: balanced quadrants and reachable pads', () => {
     for (const id of MAP_IDS) {
-      const { tiles, homePads } = buildArena(id, 8);
+      const { tiles, homePads, mine } = buildArena(id, 8);
 
-      // No quadrant may be appreciably rockier than another, or whoever spawns
-      // on the open side gets a free run at the contested centre.
+      // No quadrant may be appreciably more walled off than another, or whoever
+      // spawns on the open side gets a free run at the contested centre.
       const walls = [0, 0, 0, 0];
       const counts = [0, 0, 0, 0];
       for (let y = 1; y < MAP.size - 1; y++) {
@@ -104,15 +135,33 @@ describe('the five arenas', () => {
         }
       }
       const fracs = walls.map((w, i) => w / counts[i]!);
-      expect(Math.max(...fracs) - Math.min(...fracs), `${id} is lopsided`).toBeLessThan(0.05);
+      expect(Math.max(...fracs) - Math.min(...fracs), `${id} is lopsided`).toBeLessThan(0.12);
 
-      // Every pad must stand on clear ground and reach the middle on foot.
-      const reach = reachable(tiles);
+      // Every pad must stand on clear ground and reach the mine on foot.
+      const reach = reachable(tiles, Math.floor(mine.x), Math.floor(mine.y));
       for (const pad of homePads) {
         const k = tileIndex(Math.floor(pad.x), Math.floor(pad.y), MAP.size);
-        expect(tiles[k], `${id}: a pad is inside rock`).not.toBe(TILE_WALL);
-        expect(reach[k], `${id}: a pad cannot reach the centre`).toBe(1);
+        expect(tiles[k], `${id}: a pad is in the void`).toBe(TILE_FLOOR);
+        expect(reach[k], `${id}: a pad cannot reach the mine`).toBe(1);
       }
+    }
+  });
+
+  it('are a single connected region', () => {
+    // The importer seals unreachable pockets, so anything walkable must be
+    // walkable *from the mine* — otherwise the spawner can strand crates and
+    // chests on ground no player can ever stand on.
+    for (const id of MAP_IDS) {
+      const { tiles, mine } = buildArena(id, 8);
+      const reach = reachable(tiles, Math.floor(mine.x), Math.floor(mine.y));
+      let walkable = 0;
+      let reached = 0;
+      for (let i = 0; i < tiles.length; i++) {
+        if (tiles[i] === TILE_WALL) continue;
+        walkable++;
+        if (reach[i] === 1) reached++;
+      }
+      expect(reached, `${id} has a marooned pocket`).toBe(walkable);
     }
   });
 
@@ -130,29 +179,39 @@ describe('the five arenas', () => {
           else if (t === TILE_GRASS) grass++;
         }
       }
-      // Enough rock to make chokepoints, not so much it becomes corridors.
-      expect(wall / interior, `${id} cover`).toBeGreaterThan(0.06);
-      expect(wall / interior, `${id} cover`).toBeLessThan(0.2);
+      // Enough void to make chokepoints, not so much it becomes corridors.
+      expect(wall / interior, `${id} cover`).toBeGreaterThan(0.1);
+      expect(wall / interior, `${id} cover`).toBeLessThan(0.45);
       // Grass has to be worth routing around to justify slowing anyone down.
       expect(grass / interior, `${id} grass`).toBeGreaterThan(0.04);
     }
   });
 
+  it('puts a gem mine at the centre of every arena', () => {
+    for (const id of MAP_IDS) {
+      const { mine, tiles } = buildArena(id, 8);
+      expect(Math.hypot(mine.x - MAP.size / 2, mine.y - MAP.size / 2), `${id} mine`).toBeLessThan(2);
+      expect(tiles[tileIndex(Math.floor(mine.x), Math.floor(mine.y), MAP.size)]).not.toBe(TILE_WALL);
+    }
+  });
+
   it('names every arena it declares', () => {
+    // MAP_IDS is hand-written and arenaData.ts is generated; this is what stops
+    // the two halves drifting after a re-import adds or renames a map.
+    expect(ARENA_DATA.map((a) => a.id).sort()).toEqual([...MAP_IDS].sort());
     for (const id of MAP_IDS) {
       expect(ARENAS[id].id).toBe(id);
       expect(ARENAS[id].name.length).toBeGreaterThan(0);
+      expect(ARENAS[id].world.length).toBeGreaterThan(0);
     }
-    const seeds = MAP_IDS.map((id) => ARENAS[id].seed);
-    expect(new Set(seeds).size, 'two arenas share a seed').toBe(seeds.length);
   });
 });
 
-/** Flood fill from the arena centre over anything walkable. */
-function reachable(tiles: Uint8Array): Uint8Array {
+/** Flood fill from a point over anything walkable. */
+function reachable(tiles: Uint8Array, startX: number, startY: number): Uint8Array {
   const size = MAP.size;
   const seen = new Uint8Array(size * size);
-  const start = tileIndex(size >> 1, size >> 1, size);
+  const start = tileIndex(startX, startY, size);
   const stack = [start];
   seen[start] = 1;
   while (stack.length > 0) {

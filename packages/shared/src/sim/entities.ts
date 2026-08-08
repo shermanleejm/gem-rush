@@ -24,6 +24,7 @@ export const ENTITY_KINDS = [
   'chest',
   'gem',
   'coin',
+  'mine',
 ] as const;
 export type EntityKind = (typeof ENTITY_KINDS)[number];
 

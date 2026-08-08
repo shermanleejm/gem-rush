@@ -120,6 +120,12 @@ export interface MatchConfig {
    * in a fight and still clears camps a lone leader cannot touch; it just does
    * not bank proportionally more, so patiently farming with a small squad and
    * snowballing into a large one come out about even.
+   *
+   * Raised when the arenas became transcriptions of the real Gem Hunt maps.
+   * Those have far more impassable water than the generated ones did, which
+   * means more forced encounters, which means a small squad gets wiped more
+   * often — so the hoarding opening needed more of an edge to stay viable. It
+   * is still short of parity; see the note in `map.zoneYieldMultiplier`.
    */
   squadGemFalloff: number;
 
@@ -171,7 +177,7 @@ export const MATCH: MatchConfig = {
   reconnectGraceSeconds: 30,
   regenPerSecond: 6,
   regenDelaySeconds: 4,
-  squadGemFalloff: 0.13,
+  squadGemFalloff: 0.19,
   bustGraceSeconds: 60,
   rebuildUnitCount: 2,
 };

@@ -229,6 +229,26 @@ button.secondary {
   border-color: var(--warn);
 }
 
+/* Mine countdown. Loud on purpose — it is a call to drop what you are doing
+   and run for the middle, and it only appears for the last few seconds. */
+.pill.mine-timer {
+  color: #6ad2ff;
+  border-color: #6ad2ff;
+  letter-spacing: 0.04em;
+}
+
+.pill.mine-timer.imminent {
+  color: var(--warn);
+  border-color: var(--warn);
+  animation: mine-pulse 0.5s ease-in-out infinite;
+}
+
+@keyframes mine-pulse {
+  50% {
+    transform: scale(1.09);
+  }
+}
+
 .hud-left {
   position: absolute;
   top: max(10px, env(safe-area-inset-top));
@@ -409,7 +429,13 @@ button.secondary {
 /* Opening character draft.
    Sits over the arena rather than replacing it, so the map is visible while
    choosing. Cards wrap on narrow screens: three side by side at 108px each is
-   already tight on a phone once padding is counted. */
+   already tight on a phone once padding is counted.
+
+   The scrim used to be a near-opaque wash with a blur over it, which defeated
+   the point: you were told the arena was there and then shown a grey smear of
+   it. The cards carry their own solid background and are what needs to be
+   readable, so the backdrop only has to knock the arena back a little — not
+   hide it. */
 .draft {
   position: fixed;
   inset: 0;
@@ -419,21 +445,29 @@ button.secondary {
   justify-content: center;
   gap: 14px;
   padding: 20px;
-  background: rgba(6, 9, 14, 0.72);
-  backdrop-filter: blur(3px);
+  background: radial-gradient(
+    ellipse at center,
+    rgba(6, 9, 14, 0.55) 0%,
+    rgba(6, 9, 14, 0.28) 60%,
+    rgba(6, 9, 14, 0.12) 100%
+  );
   pointer-events: auto;
   z-index: 9;
 }
 
+/* Both sit directly on the arena now that the scrim is light, so they carry
+   their own contrast rather than relying on the backdrop for it. */
 .draft-title {
   font-size: 18px;
   font-weight: 700;
+  text-shadow: 0 2px 6px rgba(0, 0, 0, 0.9);
 }
 
 .draft-timer {
   font-size: 13px;
-  color: var(--ink-dim);
+  color: var(--ink);
   min-height: 18px;
+  text-shadow: 0 2px 6px rgba(0, 0, 0, 0.9);
 }
 
 .draft-row {
