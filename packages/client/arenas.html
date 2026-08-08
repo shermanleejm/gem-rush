@@ -1,0 +1,57 @@
+<!doctype html>
+<!--
+  Arena layout sheet — dev-only, served by `pnpm dev`, never shipped (Vite's
+  production build only takes index.html as an entry).
+
+    http://localhost:5173/arenas.html
+
+  All 22 Gem Hunt maps at once, which is how you check a transcription. Click
+  any of them to open it in the live renderer.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Gem Rush — arenas</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 24px;
+        background: #12151c;
+        color: #e6e9ef;
+        font: 14px/1.4 ui-sans-serif, system-ui, sans-serif;
+      }
+      h1 { font-size: 16px; font-weight: 600; margin: 0 0 4px; }
+      p { color: #8b93a7; margin: 0 0 20px; }
+      p a { color: #4da3ff; }
+      #grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+        gap: 18px;
+      }
+      .cell { margin: 0; }
+      .cell canvas {
+        width: 100%;
+        height: auto;
+        image-rendering: pixelated;
+        border-radius: 5px;
+        display: block;
+      }
+      .cell figcaption {
+        color: #e6e9ef;
+        font: 11px/1.5 ui-monospace, monospace;
+        margin-top: 6px;
+      }
+      .cell figcaption span { color: #8b93a7; }
+    </style>
+  </head>
+  <body>
+    <h1>Arena layouts</h1>
+    <p>
+      All 22 Gem Hunt maps, transcribed from the published art and drawn in each arena's own
+      palette. White dots are the eight home pads, the red ring is the gem mine. Click one to
+      open it in the <a href="/arena.html">live renderer</a>.
+    </p>
+    <div id="grid"></div>
+    <script type="module" src="/src/dev/arenaSheet.ts"></script>
+  </body>
+</html>

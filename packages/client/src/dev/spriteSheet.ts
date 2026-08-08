@@ -102,6 +102,8 @@ const PLAY_SIZES: [SpriteKey, number][] = [
   ['prop', 0.86],
   ['node', 1.1],
   ['chest', 1.05],
+  // Four tiles across, so it dwarfs everything else here — which is the point.
+  ['mine', 4.4],
 ];
 
 const strip = document.createElement('canvas');

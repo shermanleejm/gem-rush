@@ -7,3 +7,5 @@ dist/
 coverage/
 *.log
 bench/
+shots/
+__pycache__/

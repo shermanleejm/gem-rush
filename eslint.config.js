@@ -26,6 +26,21 @@ export default tseslint.config(
     rules: { 'no-console': 'off' },
   },
   {
+    // Build-time scripts: Node, plus the browser globals they evaluate inside
+    // the page under Playwright.
+    files: ['tools/**'],
+    languageOptions: {
+      globals: {
+        console: 'readonly',
+        process: 'readonly',
+        setTimeout: 'readonly',
+        clearTimeout: 'readonly',
+        window: 'readonly',
+        document: 'readonly',
+      },
+    },
+  },
+  {
     // Enforce the headless rule from the brief mechanically. The tsconfig
     // already omits the DOM lib; this makes the intent explicit and catches a
     // stray global before the type error is puzzled over.
