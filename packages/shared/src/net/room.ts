@@ -133,6 +133,12 @@ export class Room {
             seed: 0,
             tick0: this.world.tickNumber,
             playerCount: this.world.players.size,
+            // A late joiner needs the same match description as everyone else.
+            // These used to be omitted, which left them rendering the default
+            // arena's palette and the default mode's rules for the whole round.
+            mode: this.mode,
+            battleMod: this.battleMod,
+            map: this.world.mapId,
             assignments: [...this.world.players.values()].map((p) => ({
               id: p.id,
               index: p.index,
@@ -255,7 +261,21 @@ export class Room {
     // Ignore stale/replayed inputs; UDP-like reordering can't happen on a
     // WebSocket but a reconnect can replay an old seq.
     if (input.seq < m.input.seq) return;
-    m.input = input;
+
+    // One-shot choices survive being overwritten until a tick consumes them.
+    //
+    // Movement is pumped at 30 Hz and the sim ticks at 20, so between sending a
+    // draft pick and the tick that would read it there is usually a plain
+    // movement input carrying no choice at all — and a straight assignment
+    // dropped the pick on the floor. It looked like a coin flip: pick a
+    // character, and about half the time nothing happened and you sat through
+    // the full fifteen-second auto-pick before the match would start. Chest
+    // purchases had the same hole.
+    m.input = {
+      ...input,
+      chestChoice: input.chestChoice ?? m.input.chestChoice,
+      draftChoice: input.draftChoice ?? m.input.draftChoice,
+    };
   }
 
   setReady(id: PlayerId, ready: boolean): void {
